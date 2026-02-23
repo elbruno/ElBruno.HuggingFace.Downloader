@@ -17,6 +17,7 @@
     <RepositoryUrl>https://github.com/elbruno/ElBruno.HuggingFace.Downloader</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>logo_02.png</PackageIcon>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
 
@@ -27,6 +28,7 @@
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\images\logo_02.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>
