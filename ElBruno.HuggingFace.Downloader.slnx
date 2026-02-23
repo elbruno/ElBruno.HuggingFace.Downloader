@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src\ElBruno.HuggingFace.Downloader\ElBruno.HuggingFace.Downloader.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests\ElBruno.HuggingFace.Downloader.Tests\ElBruno.HuggingFace.Downloader.Tests.csproj" />
+  </Folder>
+</Solution>
