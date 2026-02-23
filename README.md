@@ -122,6 +122,7 @@ public class MyModelService(HuggingFaceDownloader downloader)
 | [Getting Started](docs/GETTING_STARTED.md) | Installation, all usage examples, and setup |
 | [API Reference](docs/API_REFERENCE.md) | Complete class and method documentation |
 | [Architecture](docs/ARCHITECTURE.md) | Design decisions, data flow, and project structure |
+| [Publishing](docs/publishing.md) | NuGet publishing with GitHub Actions |
 
 ## Building from Source
 
