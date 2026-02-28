@@ -41,8 +41,8 @@ public sealed class HuggingFaceDownloader : IDisposable
     private HuggingFaceDownloader(HttpClient httpClient, bool ownsHttpClient, HuggingFaceDownloaderOptions options, ILogger<HuggingFaceDownloader>? logger)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _options = options ?? throw new ArgumentNullException(nameof(options));
         _ownsHttpClient = ownsHttpClient;
-        _options = options;
         _logger = logger ?? NullLogger<HuggingFaceDownloader>.Instance;
     }
 
@@ -79,7 +79,7 @@ public sealed class HuggingFaceDownloader : IDisposable
         Directory.CreateDirectory(request.LocalDirectory);
 
         // Build combined file list with required/optional flag
-        var allFiles = new List<(string path, bool required)>();
+        var allFiles = new List<(string path, bool required)>(request.RequiredFiles.Count + (request.OptionalFiles?.Count ?? 0));
         foreach (var f in request.RequiredFiles)
             allFiles.Add((f, true));
         if (request.OptionalFiles is not null)
@@ -187,20 +187,20 @@ public sealed class HuggingFaceDownloader : IDisposable
                 if (statusCode == System.Net.HttpStatusCode.Unauthorized || statusCode == System.Net.HttpStatusCode.Forbidden)
                 {
                     throw new InvalidOperationException(
-                        $"Access denied downloading '{filePath}' from https://huggingface.co/{request.RepoId}. " +
-                        "The repository may be private or gated. Set the HF_TOKEN environment variable or pass AuthToken in options.",
+                        $"Access denied downloading '{filePath}'. " +
+                        "The repository may be private or gated. Ensure HF_TOKEN is set with appropriate permissions.",
                         ex);
                 }
 
                 if (statusCode == System.Net.HttpStatusCode.NotFound)
                 {
                     throw new InvalidOperationException(
-                        $"File '{filePath}' not found (404) at https://huggingface.co/{request.RepoId}.",
+                        $"File '{filePath}' not found (404).",
                         ex);
                 }
 
                 throw new InvalidOperationException(
-                    $"Failed to download required file '{filePath}' from https://huggingface.co/{request.RepoId}: {ex.Message}",
+                    $"Failed to download required file '{filePath}': {ex.Message}",
                     ex);
             }
         }
@@ -262,7 +262,13 @@ public sealed class HuggingFaceDownloader : IDisposable
         try
         {
             await using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            await using var fileStream = new FileStream(writePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+            await using var fileStream = new FileStream(
+                writePath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 81920,
+                useAsync: true);
 
             var buffer = new byte[81920];
             int bytesRead;
@@ -306,16 +312,17 @@ public sealed class HuggingFaceDownloader : IDisposable
 
     private static HttpClient CreateHttpClient(HuggingFaceDownloaderOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         var client = new HttpClient { Timeout = options.Timeout };
 
         var token = options.ResolveToken();
         if (!string.IsNullOrEmpty(token))
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        if (!string.IsNullOrEmpty(options.UserAgent))
-            client.DefaultRequestHeaders.UserAgent.ParseAdd(options.UserAgent);
-        else
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("ElBruno.HuggingFace.Downloader/1.0");
+        var userAgent = options.UserAgent ?? "ElBruno.HuggingFace.Downloader/1.0";
+        client.DefaultRequestHeaders.UserAgent.Clear();
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
 
         return client;
     }

@@ -7,6 +7,8 @@ namespace ElBruno.HuggingFace;
 /// </summary>
 public sealed class HuggingFaceDownloaderOptions
 {
+    private TimeSpan _timeout = TimeSpan.FromMinutes(30);
+
     /// <summary>
     /// Hugging Face authentication token. When null, the downloader reads
     /// the <c>HF_TOKEN</c> environment variable automatically.
@@ -14,9 +16,18 @@ public sealed class HuggingFaceDownloaderOptions
     public string? AuthToken { get; set; }
 
     /// <summary>
-    /// HTTP request timeout. Defaults to 30 minutes.
+    /// HTTP request timeout. Defaults to 30 minutes. Must be greater than zero.
     /// </summary>
-    public TimeSpan Timeout { get; set; } = TimeSpan.FromMinutes(30);
+    public TimeSpan Timeout
+    {
+        get => _timeout;
+        set
+        {
+            if (value <= TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(Timeout), "Timeout must be greater than zero.");
+            _timeout = value;
+        }
+    }
 
     /// <summary>
     /// When true, the downloader issues HEAD requests before downloading

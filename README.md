@@ -124,6 +124,10 @@ public class MyModelService(HuggingFaceDownloader downloader)
 | [Architecture](docs/ARCHITECTURE.md) | Design decisions, data flow, and project structure |
 | [Publishing](docs/publishing.md) | NuGet publishing with GitHub Actions |
 
+## Related Projects
+
+- **[ElBruno.PersonaPlex](https://github.com/elbruno/ElBruno.PersonaPlex)** — Integrates this downloader to auto-download ONNX models for NVIDIA's PersonaPlex-7B-v1 full-duplex speech-to-speech model
+
 ## Building from Source
 
 ```bash
