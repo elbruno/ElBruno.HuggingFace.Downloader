@@ -144,3 +144,58 @@ This is a .NET library for downloading files from Hugging Face Hub repositories.
 **Result:** All 99 tests pass (34 new + 65 existing). Committed to branch.
 
 **Status:** ✅ Phase 1 complete.
+
+### 2025-07-18: Phase 4 — Authentication & Configuration Tests + Edge Cases
+
+**Task:** Implement Phase 4 tests (auth, token resolution, HTTP config) plus critical edge case tests deferred from Phase 3.
+
+**Tests Written (25 new, 147 total):**
+
+**AuthenticationAndConfigurationTests.cs (NEW — 17 tests):**
+
+*ResolveToken (5 tests):*
+1. `ResolveToken_WithAuthToken_ReturnsAuthToken` — explicit token returned
+2. `ResolveToken_WithoutAuthToken_ReturnsHfTokenEnvVar` — HF_TOKEN env var fallback
+3. `ResolveToken_WithBothAuthTokenAndEnvVar_PrefersAuthToken` — AuthToken takes priority
+4. `ResolveToken_WithNeitherSet_ReturnsNull` — null when no token source
+5. `ResolveToken_WithEmptyAuthToken_FallsBackToEnvVar` — empty string is not null, stays as AuthToken
+
+*Auth Header (3 tests):*
+6. `DownloadFilesAsync_WithBearerToken_SendsAuthorizationHeader` — Bearer token in GET requests
+7. `DownloadFilesAsync_WithoutToken_NoAuthorizationHeader` — no auth header for public repos
+8. `DownloadFilesAsync_BearerTokenSentOnHeadRequests` — auth header also on HEAD requests
+
+*User-Agent (2 tests):*
+9. `DownloadFilesAsync_WithCustomUserAgent_SendsCustomUserAgent` — custom User-Agent propagated
+10. `DownloadFilesAsync_WithDefaultUserAgent_SendsLibraryUserAgent` — default "ElBruno.HuggingFace.Downloader/1.0"
+
+*Constructor Config (4 tests):*
+11. `Constructor_WithAuthToken_DoesNotThrow` — options constructor with token
+12. `Constructor_WithHfTokenEnvVar_DoesNotThrow` — options constructor with HF_TOKEN env
+13. `Constructor_WithCustomUserAgent_DoesNotThrow` — options constructor with custom agent
+14. `Constructor_WithCustomTimeout_DoesNotThrow` — options constructor with custom timeout
+
+**Edge Case Tests Added to Existing Files (8 tests):**
+
+*ByteFormatHelperTests.cs (5 new):*
+15. `FormatBytes_NegativeValue_DoesNotThrow` — Theory×3 for -1, -1024, -1048576
+16. `FormatBytes_Zero_ReturnsZeroBytes` — explicit zero check
+17. `FormatBytes_LargeValue_FormatsAsGB` — 5GB value
+18. `FormatBytes_ExactlyOneKB_FormatsAsKB` — boundary value
+19. `FormatBytes_ExactlyOneMB_FormatsAsMB` — boundary value
+
+*ServiceCollectionExtensionsTests.cs (1 new):*
+20. `AddHuggingFaceDownloader_NullServices_ThrowsArgumentNullException` — null safety
+
+*HuggingFaceDownloaderTests.cs (3 new):*
+21. `DownloadFilesAsync_EmptyRequiredFiles_OnlyOptionalMissing_DownloadsOptional` — empty required + optional download
+22. `DownloadFilesAsync_VerifyFileContent_MatchesResponse` — binary content exact match
+23. `DownloadFilesAsync_ThrowingProgressHandler_PropagatesException` — exception propagation from progress
+
+**Key Implementation Decisions:**
+1. Added `InternalsVisibleTo` to library csproj to test `ResolveToken()` directly — standard practice for test projects.
+2. Auth header tests use externally-provided HttpClient with pre-set headers + MockHttpMessageHandler to capture requests.
+3. HF_TOKEN env var tests use IDisposable to save/restore original value, preventing test pollution.
+4. Binary content test uses raw byte arrays to verify exact byte-level fidelity of downloads.
+
+**Status:** ✅ Phase 4 complete. All 4 phases done. 147 total tests passing.

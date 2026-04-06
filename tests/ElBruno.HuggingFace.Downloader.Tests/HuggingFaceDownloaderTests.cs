@@ -1077,6 +1077,81 @@ public class HuggingFaceDownloaderTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_tempDir, "file.txt")));
     }
 
+    [Fact]
+    public async Task DownloadFilesAsync_EmptyRequiredFiles_OnlyOptionalMissing_DownloadsOptional()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("optional data")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = [],
+            OptionalFiles = ["readme.md"]
+        });
+
+        var optPath = Path.Combine(_tempDir, "readme.md");
+        Assert.True(File.Exists(optPath));
+        Assert.Equal("optional data", await File.ReadAllTextAsync(optPath));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_VerifyFileContent_MatchesResponse()
+    {
+        // Use binary-like content to verify exact byte match
+        var binaryContent = new byte[] { 0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD, 0x80, 0x7F };
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(binaryContent)
+            };
+            return Task.FromResult(response);
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["binary.bin"]
+        });
+
+        var writtenBytes = await File.ReadAllBytesAsync(Path.Combine(_tempDir, "binary.bin"));
+        Assert.Equal(binaryContent, writtenBytes);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_ThrowingProgressHandler_PropagatesException()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("data")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        var throwingProgress = new SynchronousProgress<DownloadProgress>(_ =>
+            throw new InvalidOperationException("Progress handler failure"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["file.txt"],
+                Progress = throwingProgress
+            }));
+    }
+
     #endregion
 }
 
