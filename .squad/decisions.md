@@ -105,3 +105,77 @@ Authoritative record of architectural, scope, and process decisions made by the 
 - Retrospective: auto-triggered after failures (build failures, test failures, rejections).
 - Rationale: Alignment, continuous improvement.
 - Status: ✅ Established (see `.squad/ceremonies.md`)
+
+---
+
+## Implementation & Maintenance
+
+### 2026-04-06: NuGet Dependency Upgrade to 10.x
+
+**By:** Trinity (Backend/Library Developer)  
+**Status:** ✅ **Implemented**  
+**Timestamp:** 2026-04-06T13:40:33Z
+
+**What:** Upgraded all NuGet dependencies to latest stable versions.
+
+**Library Project (net8.0;net9.0):**
+- Microsoft.Extensions.DependencyInjection.Abstractions: 9.0.0 → 10.0.5
+- Microsoft.Extensions.Logging.Abstractions: 9.0.0 → 10.0.5
+
+**Test Project (net9.0):**
+- Microsoft.Extensions.DependencyInjection: 9.0.0 → 10.0.5
+- Microsoft.NET.Test.Sdk: 17.12.0 → 18.3.0
+- xunit.runner.visualstudio: 2.8.2 → 3.1.5
+
+**Why:** Security patches, bug fixes, better .NET 10 support, modern test infrastructure. All 65 tests pass without modification. No breaking changes; backward compatible with net8.0.
+
+---
+
+### 2026-04-06: Test Coverage Strategy (4-Phase Proposal)
+
+**By:** Agent Smith (Test Architect)  
+**Status:** 📋 **Proposed** (Awaiting Bruno Capuano Approval)  
+**Timestamp:** 2026-04-06T13:40:33Z
+
+**What:** Four-phase testing strategy to expand coverage from ~30% (core logic) to 90%+ target.
+
+**Phase 1 (CRITICAL):** Security & Validation (22 tests)
+- URL validation: null/empty/malformed/path-traversal inputs
+- Options timeout validation
+- Path helper null/empty handling
+
+**Phase 2 (CRITICAL):** Core Download Flow (18 tests)
+- Mocked HTTP download tests (single/multiple files, progress, atomic writes)
+- Atomic write verification (temp files, renames)
+- Progress reporting (stage transitions)
+
+**Phase 3 (IMPORTANT):** Error Handling (12 tests)
+- HTTP error codes (401/403/404/500)
+- Cancellation scenarios with cleanup
+- File I/O failures (disk full, permissions)
+
+**Phase 4 (IMPORTANT):** Authentication & Configuration (10 tests)
+- Authorization headers with/without token
+- Environment variable fallback (HF_TOKEN)
+- File size resolution via HEAD requests
+
+**Why:** Security vulnerabilities are critical (path traversal). Core download pipeline untested with real HTTP mocking. Error scenarios define user experience. Authentication behavior should be explicit and tested.
+
+**Testing Patterns:**
+- HttpMessageHandler mocking (no external dependencies, deterministic)
+- Atomic write verification via progress callbacks
+- Progress capture with stage transition assertions
+
+**Effort:** 2-4 weeks; prioritize Phases 1-2 (40 tests) for critical gaps.
+
+**Risks & Mitigations:**
+- Mocked tests won't catch real-world HTTP issues → Add opt-in integration tests against live HF Hub
+- 75 tests is large effort → Focus on critical phases first
+- Brittle HTTP mocking → Test behavior, not implementation
+
+**Next Steps:**
+1. Get approval from Bruno Capuano
+2. Implement Phase 1 tests (security validation)
+3. Implement Phase 2 tests (core download flow)
+4. Implement Phase 3 tests (error handling)
+5. Implement Phase 4 tests (authentication)
