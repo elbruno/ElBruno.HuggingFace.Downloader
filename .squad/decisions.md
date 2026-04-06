@@ -158,6 +158,32 @@ Authoritative record of architectural, scope, and process decisions made by the 
 
 ---
 
+### 2026-04-06T14:11:06Z: Phase 4 Authentication and Configuration Tests
+
+**By:** Agent Smith (Test Architect)  
+**Status:** ✅ **Implemented**  
+**Timestamp:** 2026-04-06T14:11:06Z
+
+**What:** Implemented Phase 4 (25 tests) completing the 4-phase test strategy. Added AuthenticationAndConfigurationTests.cs with ResolveToken unit tests, HF_TOKEN environment variable fallback validation, AuthToken override tests, timeout edge cases, ByteFormatHelper edge case coverage, ServiceCollectionExtensions null check, and download edge cases.
+
+**Phase 4 Implementation (25 tests):**
+- ResolveToken direct unit tests (5 tests): null token → HF_TOKEN env var, AuthToken provided → use explicit, HF_TOKEN missing → empty fallback
+- HF_TOKEN environment variable fallback (4 tests): fallback when no explicit token, empty string handling, precedence validation
+- AuthToken explicit override (3 tests): override env var, null handling, precedence verification
+- Timeout edge cases (4 tests): timeout <= 0 handling, millisecond boundaries, configuration validation
+- ByteFormatHelper edge cases (3 tests): null input handling, zero/negative size formatting, boundary conditions
+- ServiceCollectionExtensions null safety (2 tests): null DI provider handling, null logger factory handling
+- Download edge cases (4 tests): empty file lists, malformed URLs, concurrent requests, cleanup verification
+
+**Why:** InternalsVisibleTo enables direct unit testing of ResolveToken logic. Authentication behavior must be explicit and testable. Edge cases prevent runtime failures.
+
+**Added to Library csproj:**
+- `<InternalsVisibleTo Include="ElBruno.HuggingFace.Downloader.Tests" />` to enable test access to internal ResolveToken method.
+
+**Result:** All 147 tests pass (122 from phases 1-3 + 25 phase 4). Complete 4-phase test strategy implemented. No source code bugs. Test suite ready for coverage analysis.
+
+---
+
 ### 2026-04-06T13:48Z: User Directive — Defer Phase 4
 
 **By:** Bruno Capuano (via Copilot)  
