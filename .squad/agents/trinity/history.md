@@ -29,4 +29,43 @@ This is a .NET library for downloading files from Hugging Face Hub repositories.
 
 ## Learnings
 
-(Append learnings as sessions progress.)
+### 2026-04-06: NuGet Dependency Upgrade Session
+
+Upgraded all NuGet dependencies to latest stable versions:
+
+**Library project (targets net8.0;net9.0):**
+- Microsoft.Extensions.DependencyInjection.Abstractions: 9.0.0 → 10.0.5
+- Microsoft.Extensions.Logging.Abstractions: 9.0.0 → 10.0.5
+
+**Test project (targets net9.0):**
+- Microsoft.Extensions.DependencyInjection: 9.0.0 → 10.0.5
+- Microsoft.NET.Test.Sdk: 17.12.0 → 18.3.0
+- xunit.runner.visualstudio: 2.8.2 → 3.1.5
+
+**Compatibility findings:**
+- Microsoft.Extensions 10.0.5 packages are compatible with both net8.0 and net9.0 target frameworks
+- No breaking changes encountered — all 65 tests passed without modification after upgrade
+- xUnit runner upgraded from v2 to v3 (3.1.5) without issues
+- Full build verified on both target frameworks
+
+**Note:** Issue #4 (from Neo triage) identified target framework mismatch. Original project file had net10.0 but policy requires net8.0;net9.0. The dependency upgrade maintains policy-compliant targets. Next step: verify .csproj reflects correct targets before issue #4 implementation.
+
+### 2026-04-06: Validation Gaps Found in DefaultPathHelper
+
+**Cross-Agent Alert from Agent Smith**
+
+During Phase 1 security & validation testing, Agent Smith discovered two validation gaps in DefaultPathHelper:
+
+1. **`SanitizeModelName(string modelName)` — No null guard**
+   - Throws `NullReferenceException` from chained `.Replace()` calls
+   - Should throw `ArgumentException` or `ArgumentNullException` with clear message
+   - Risk: Low (functional, not security); confuses consumers
+
+2. **`GetDefaultCacheDirectory(string appName)` — No null/empty guard**
+   - Null: throws `ArgumentNullException` from `Path.Combine`, not our code
+   - Empty: silently produces path with empty segment (e.g., `C:\Users\...\AppData\Local\\models`)
+   - Should throw `ArgumentException` for both with clear message
+   - Risk: Low; could create unexpected directory structures
+
+**Recommendation:** Add `ArgumentException.ThrowIfNullOrWhiteSpace()` guards (1 line each) at method entry. Tests already document current behavior. Not blocking Phase 4 implementation but should be hardened before next release.
+

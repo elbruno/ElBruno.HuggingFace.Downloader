@@ -18,4 +18,43 @@ public class ByteFormatHelperTests
     {
         Assert.Equal(expected, ByteFormatHelper.FormatBytes(input));
     }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(-1024)]
+    [InlineData(-1048576)]
+    public void FormatBytes_NegativeValue_DoesNotThrow(long input)
+    {
+        // Negative values should not crash; the result format is implementation-defined
+        var result = ByteFormatHelper.FormatBytes(input);
+        Assert.NotNull(result);
+        Assert.NotEmpty(result);
+    }
+
+    [Fact]
+    public void FormatBytes_Zero_ReturnsZeroBytes()
+    {
+        Assert.Equal("0 B", ByteFormatHelper.FormatBytes(0));
+    }
+
+    [Fact]
+    public void FormatBytes_LargeValue_FormatsAsGB()
+    {
+        // 5 GB = 5,368,709,120 bytes
+        var result = ByteFormatHelper.FormatBytes(5_368_709_120);
+        Assert.Contains("GB", result);
+        Assert.Contains("5.00", result);
+    }
+
+    [Fact]
+    public void FormatBytes_ExactlyOneKB_FormatsAsKB()
+    {
+        Assert.Equal("1.0 KB", ByteFormatHelper.FormatBytes(1024));
+    }
+
+    [Fact]
+    public void FormatBytes_ExactlyOneMB_FormatsAsMB()
+    {
+        Assert.Equal("1.0 MB", ByteFormatHelper.FormatBytes(1_048_576));
+    }
 }

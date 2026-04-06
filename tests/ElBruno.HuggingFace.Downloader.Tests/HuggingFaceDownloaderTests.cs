@@ -1,3 +1,4 @@
+using System.Net;
 using ElBruno.HuggingFace;
 using Xunit;
 
@@ -434,6 +435,721 @@ public class HuggingFaceDownloaderTests : IDisposable
             Revision = "v2.0"
         };
         Assert.Equal("v2.0", request.Revision);
+    }
+
+    #endregion
+
+    #region Mock Helpers
+
+    private sealed class MockHttpMessageHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => handler(request, cancellationToken);
+    }
+
+    private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
+    }
+
+    /// <summary>
+    /// A stream that cancels the provided CTS on the first read, simulating mid-download cancellation.
+    /// </summary>
+    private sealed class CancellingStream(byte[] data, CancellationTokenSource cts) : MemoryStream(data)
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cts.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            return base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
+    private static HttpResponseMessage CreateFileResponse(string content) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(content) };
+
+    private static HttpResponseMessage CreateHeadResponse(long contentLength)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent([])
+        };
+        response.Content.Headers.ContentLength = contentLength;
+        return response;
+    }
+
+    #endregion
+
+    #region Phase 2: Core Download Flow Tests
+
+    [Fact]
+    public async Task DownloadFilesAsync_SingleRequiredFile_DownloadsSuccessfully()
+    {
+        const string fileContent = "model binary data here";
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse(fileContent)));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.onnx"]
+        });
+
+        var filePath = Path.Combine(_tempDir, "model.onnx");
+        Assert.True(File.Exists(filePath));
+        Assert.Equal(fileContent, await File.ReadAllTextAsync(filePath));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_MultipleRequiredFiles_DownloadsAll()
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["model.onnx"] = "model data",
+            ["config.json"] = """{"hidden_size": 384}""",
+            ["tokenizer.json"] = """{"vocab_size": 30522}"""
+        };
+
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var url = request.RequestUri!.ToString();
+            foreach (var (name, content) in files)
+            {
+                if (url.EndsWith(name))
+                    return Task.FromResult(CreateFileResponse(content));
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.onnx", "config.json", "tokenizer.json"]
+        });
+
+        foreach (var (name, expected) in files)
+        {
+            var path = Path.Combine(_tempDir, name);
+            Assert.True(File.Exists(path), $"File {name} should exist");
+            Assert.Equal(expected, await File.ReadAllTextAsync(path));
+        }
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_MixedRequiredAndOptional_DownloadsAll()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("content")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.onnx"],
+            OptionalFiles = ["README.md"]
+        });
+
+        Assert.True(File.Exists(Path.Combine(_tempDir, "model.onnx")));
+        Assert.True(File.Exists(Path.Combine(_tempDir, "README.md")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_SkipsExistingFiles_DownloadsOnlyMissing()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, "existing.txt"), "already here");
+
+        var downloadedUrls = new List<string>();
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                downloadedUrls.Add(request.RequestUri!.ToString());
+            return Task.FromResult(CreateFileResponse("new content"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["existing.txt", "missing.txt"]
+        });
+
+        Assert.Single(downloadedUrls);
+        Assert.Contains("missing.txt", downloadedUrls[0]);
+        Assert.Equal("already here", await File.ReadAllTextAsync(Path.Combine(_tempDir, "existing.txt")));
+        Assert.Equal("new content", await File.ReadAllTextAsync(Path.Combine(_tempDir, "missing.txt")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_WithProgress_ReportsAllStages()
+    {
+        var reports = new List<DownloadProgress>();
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(CreateHeadResponse(7));
+            return Task.FromResult(CreateFileResponse("content"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = true };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.onnx"],
+            Progress = new SynchronousProgress<DownloadProgress>(p => reports.Add(p))
+        });
+
+        var stages = reports.Select(r => r.Stage).Distinct().ToList();
+        Assert.Contains(DownloadStage.Checking, stages);
+        Assert.Contains(DownloadStage.Downloading, stages);
+        Assert.Contains(DownloadStage.Validating, stages);
+        Assert.Contains(DownloadStage.Complete, stages);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_WithProgress_ReportsCurrentFileAndIndex()
+    {
+        var reports = new List<DownloadProgress>();
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("data")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["first.txt", "second.txt"],
+            Progress = new SynchronousProgress<DownloadProgress>(p => reports.Add(p))
+        });
+
+        var downloadReports = reports.Where(r => r.Stage == DownloadStage.Downloading).ToList();
+        Assert.Contains(downloadReports, r => r.CurrentFile == "first.txt" && r.CurrentFileIndex == 1);
+        Assert.Contains(downloadReports, r => r.CurrentFile == "second.txt" && r.CurrentFileIndex == 2);
+        Assert.All(downloadReports, r => Assert.Equal(2, r.TotalFileCount));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_WithProgress_CompletionReaches100Percent()
+    {
+        var reports = new List<DownloadProgress>();
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("data")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["file.txt"],
+            Progress = new SynchronousProgress<DownloadProgress>(p => reports.Add(p))
+        });
+
+        var completeReport = reports.Last(r => r.Stage == DownloadStage.Complete);
+        Assert.Equal(100, completeReport.PercentComplete);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_WithAtomicWrites_FinalFileExistsAndTempRemoved()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("atomic content")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["data.bin"],
+            UseAtomicWrites = true
+        });
+
+        Assert.True(File.Exists(Path.Combine(_tempDir, "data.bin")));
+        Assert.False(File.Exists(Path.Combine(_tempDir, "data.bin.tmp")));
+        Assert.Equal("atomic content", await File.ReadAllTextAsync(Path.Combine(_tempDir, "data.bin")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_WithoutAtomicWrites_WritesDirectly()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("direct content")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["data.bin"],
+            UseAtomicWrites = false
+        });
+
+        Assert.True(File.Exists(Path.Combine(_tempDir, "data.bin")));
+        Assert.False(File.Exists(Path.Combine(_tempDir, "data.bin.tmp")));
+        Assert.Equal("direct content", await File.ReadAllTextAsync(Path.Combine(_tempDir, "data.bin")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_CustomRevision_UsesCorrectUrl()
+    {
+        string? capturedUrl = null;
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Get)
+                capturedUrl = request.RequestUri!.ToString();
+            return Task.FromResult(CreateFileResponse("data"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.onnx"],
+            Revision = "v2.0"
+        });
+
+        Assert.NotNull(capturedUrl);
+        Assert.Contains("/resolve/v2.0/", capturedUrl);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_NestedPaths_CreatesSubdirectories()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("nested content")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["models/onnx/model.onnx"]
+        });
+
+        var expectedPath = Path.Combine(_tempDir, "models", "onnx", "model.onnx");
+        Assert.True(File.Exists(expectedPath));
+        Assert.Equal("nested content", await File.ReadAllTextAsync(expectedPath));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_WithResolveFileSizes_IssuesHeadRequests()
+    {
+        var headRequestCount = 0;
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+            {
+                Interlocked.Increment(ref headRequestCount);
+                return Task.FromResult(CreateHeadResponse(100));
+            }
+            return Task.FromResult(CreateFileResponse("data"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = true };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["a.txt", "b.txt"]
+        });
+
+        Assert.Equal(2, headRequestCount);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_WithoutResolveFileSizes_SkipsHeadRequests()
+    {
+        var headRequestCount = 0;
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+            {
+                Interlocked.Increment(ref headRequestCount);
+                return Task.FromResult(CreateHeadResponse(100));
+            }
+            return Task.FromResult(CreateFileResponse("data"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["a.txt", "b.txt"]
+        });
+
+        Assert.Equal(0, headRequestCount);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_HeadRequestFails_ContinuesDownload()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+            return Task.FromResult(CreateFileResponse("data despite HEAD failure"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = true };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["file.txt"]
+        });
+
+        Assert.True(File.Exists(Path.Combine(_tempDir, "file.txt")));
+        Assert.Equal("data despite HEAD failure", await File.ReadAllTextAsync(Path.Combine(_tempDir, "file.txt")));
+    }
+
+    #endregion
+
+    #region Phase 3: Error Handling Tests
+
+    [Fact]
+    public async Task DownloadFilesAsync_RequiredFile404_ThrowsInvalidOperationException()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["missing.onnx"]
+            }));
+
+        Assert.Contains("not found", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("404", ex.Message);
+        Assert.IsType<HttpRequestException>(ex.InnerException);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_RequiredFile401_ThrowsWithTokenGuidance()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized)));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["gated-model.onnx"]
+            }));
+
+        Assert.Contains("Access denied", ex.Message);
+        Assert.Contains("HF_TOKEN", ex.Message);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_RequiredFile403_ThrowsWithTokenGuidance()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["private-model.onnx"]
+            }));
+
+        Assert.Contains("Access denied", ex.Message);
+        Assert.Contains("HF_TOKEN", ex.Message);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_RequiredFile500_ThrowsInvalidOperationException()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["model.onnx"]
+            }));
+
+        Assert.Contains("Failed to download", ex.Message);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_OptionalFile404_ContinuesWithoutThrowing()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var url = request.RequestUri!.ToString();
+            if (url.Contains("optional"))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            return Task.FromResult(CreateFileResponse("required content"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["required.onnx"],
+            OptionalFiles = ["optional.json"]
+        });
+
+        Assert.True(File.Exists(Path.Combine(_tempDir, "required.onnx")));
+        Assert.False(File.Exists(Path.Combine(_tempDir, "optional.json")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_OptionalFile500_ContinuesWithoutThrowing()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var url = request.RequestUri!.ToString();
+            if (url.Contains("optional"))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+            return Task.FromResult(CreateFileResponse("required content"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["required.onnx"],
+            OptionalFiles = ["optional.json"]
+        });
+
+        Assert.True(File.Exists(Path.Combine(_tempDir, "required.onnx")));
+        Assert.False(File.Exists(Path.Combine(_tempDir, "optional.json")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_CancelledDuringDownload_ThrowsOperationCancelled()
+    {
+        using var cts = new CancellationTokenSource();
+
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new CancellingStream(new byte[1024], cts))
+            };
+            return Task.FromResult(response);
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["model.onnx"]
+            }, cts.Token));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_CancelledDuringDownload_CleansTempFile()
+    {
+        using var cts = new CancellationTokenSource();
+
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new CancellingStream(new byte[1024], cts))
+            };
+            return Task.FromResult(response);
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["model.onnx"],
+                UseAtomicWrites = true
+            }, cts.Token));
+
+        Assert.False(File.Exists(Path.Combine(_tempDir, "model.onnx.tmp")));
+        Assert.False(File.Exists(Path.Combine(_tempDir, "model.onnx")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_NullProgress_DoesNotThrow()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("data")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["file.txt"],
+            Progress = null
+        });
+
+        Assert.True(File.Exists(Path.Combine(_tempDir, "file.txt")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_EmptyRequiredFiles_OnlyOptionalMissing_DownloadsOptional()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("optional data")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = [],
+            OptionalFiles = ["readme.md"]
+        });
+
+        var optPath = Path.Combine(_tempDir, "readme.md");
+        Assert.True(File.Exists(optPath));
+        Assert.Equal("optional data", await File.ReadAllTextAsync(optPath));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_VerifyFileContent_MatchesResponse()
+    {
+        // Use binary-like content to verify exact byte match
+        var binaryContent = new byte[] { 0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD, 0x80, 0x7F };
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(binaryContent)
+            };
+            return Task.FromResult(response);
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["binary.bin"]
+        });
+
+        var writtenBytes = await File.ReadAllBytesAsync(Path.Combine(_tempDir, "binary.bin"));
+        Assert.Equal(binaryContent, writtenBytes);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_ThrowingProgressHandler_PropagatesException()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(CreateFileResponse("data")));
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        var throwingProgress = new SynchronousProgress<DownloadProgress>(_ =>
+            throw new InvalidOperationException("Progress handler failure"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["file.txt"],
+                Progress = throwingProgress
+            }));
     }
 
     #endregion

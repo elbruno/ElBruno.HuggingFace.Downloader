@@ -60,4 +60,13 @@ public class ServiceCollectionExtensionsTests
 
         Assert.Same(first, second);
     }
+
+    [Fact]
+    public void AddHuggingFaceDownloader_NullServices_ThrowsArgumentNullException()
+    {
+        IServiceCollection services = null!;
+
+        Assert.Throws<ArgumentNullException>(() =>
+            services.AddHuggingFaceDownloader());
+    }
 }
