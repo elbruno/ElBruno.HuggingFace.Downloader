@@ -131,6 +131,45 @@ Authoritative record of architectural, scope, and process decisions made by the 
 
 ---
 
+### 2026-04-06T13:48Z: Phase 1-3 Test Implementation Complete
+
+**By:** Agent Smith (Test Architect)  
+**Status:** ✅ **Implemented**  
+**Timestamp:** 2026-04-06T13:48:19Z
+
+**What:** Implemented Phase 1 (34 tests) and Phase 2+3 (23 tests) from test strategy, bringing total coverage from ~30% to ~45%. Phase 4 deferred.
+
+**Phase 1 Implementation (34 tests):**
+- HuggingFaceUrlBuilder: 16 validation tests (null/empty/malformed/path traversal on repoId, filePath, revision)
+- HuggingFaceDownloaderOptionsValidationTests: 4 timeout validation tests
+- DefaultPathHelper: 4 edge case tests (null/empty handling)
+
+**Phase 2+3 Implementation (23 tests):**
+- Core download flow (14 tests): single/multiple/mixed files, progress stages, atomic writes, HEAD requests
+- Error handling (9 tests): HTTP 401/403/404/500, optional resilience, cancellation with cleanup
+
+**Why:** Security-critical gaps addressed. Download pipeline behavior verified. Error semantics explicit.
+
+**Validation Gaps Discovered (LOW priority, functional):**
+- `DefaultPathHelper.SanitizeModelName` — No null guard (throws NRE vs ArgumentException)
+- `DefaultPathHelper.GetDefaultCacheDirectory` — No explicit null/empty validation
+
+**Result:** All 122 tests pass. No bugs in source code. Ready for Phase 4 (next session).
+
+---
+
+### 2026-04-06T13:48Z: User Directive — Defer Phase 4
+
+**By:** Bruno Capuano (via Copilot)  
+**Status:** ✅ **Acknowledged**  
+**Timestamp:** 2026-04-06T13:48Z
+
+**What:** Do not implement Phase 4 test recommendations (authentication, environment variables, file size resolution). Defer to next week.
+
+**Why:** User request — captured for team memory.
+
+---
+
 ### 2026-04-06: Test Coverage Strategy (4-Phase Proposal)
 
 **By:** Agent Smith (Test Architect)  

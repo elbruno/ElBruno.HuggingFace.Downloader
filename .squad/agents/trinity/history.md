@@ -49,3 +49,23 @@ Upgraded all NuGet dependencies to latest stable versions:
 - Full build verified on both target frameworks
 
 **Note:** Issue #4 (from Neo triage) identified target framework mismatch. Original project file had net10.0 but policy requires net8.0;net9.0. The dependency upgrade maintains policy-compliant targets. Next step: verify .csproj reflects correct targets before issue #4 implementation.
+
+### 2026-04-06: Validation Gaps Found in DefaultPathHelper
+
+**Cross-Agent Alert from Agent Smith**
+
+During Phase 1 security & validation testing, Agent Smith discovered two validation gaps in DefaultPathHelper:
+
+1. **`SanitizeModelName(string modelName)` — No null guard**
+   - Throws `NullReferenceException` from chained `.Replace()` calls
+   - Should throw `ArgumentException` or `ArgumentNullException` with clear message
+   - Risk: Low (functional, not security); confuses consumers
+
+2. **`GetDefaultCacheDirectory(string appName)` — No null/empty guard**
+   - Null: throws `ArgumentNullException` from `Path.Combine`, not our code
+   - Empty: silently produces path with empty segment (e.g., `C:\Users\...\AppData\Local\\models`)
+   - Should throw `ArgumentException` for both with clear message
+   - Risk: Low; could create unexpected directory structures
+
+**Recommendation:** Add `ArgumentException.ThrowIfNullOrWhiteSpace()` guards (1 line each) at method entry. Tests already document current behavior. Not blocking Phase 4 implementation but should be hardened before next release.
+
