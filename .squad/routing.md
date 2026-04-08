@@ -14,7 +14,9 @@ Route work to squad members based on task domain and agent expertise.
 | **Publishing / Releases** | Morpheus | Neo | Neo |
 | **Performance & Caching** | Trinity | Agent Smith | Neo |
 | **Error Handling & Resilience** | Trinity | Agent Smith | Neo |
-| **NuGet Package** | Morpheus | Trinity | Neo |
+| **CLI Tool / Commands** | Tank | Trinity | Neo |
+| **Console UX / Output** | Tank | Morpheus | Neo |
+| **NuGet Package** | Morpheus | Tank | Neo |
 
 ## By Task Type
 

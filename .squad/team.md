@@ -17,6 +17,7 @@ A .NET library for downloading files from Hugging Face Hub repositories with pro
 | Trinity | Backend/Library Dev | Core downloader implementation, API design, service integration | 🔧 |
 | Agent Smith | Test Architect | Test strategy, edge cases, integration tests, CI resilience | 🧪 |
 | Morpheus | Documentation/DevRel | API guides, getting started, examples, publishing workflows | 📝 |
+| Tank | CLI Developer | Command design, console UX, dotnet tool packaging | ⚙️ |
 | Scribe | Session Logger | Decisions, memories, session logs | 📋 |
 | Ralph | Work Monitor | Issue triage, backlog, keep-alive | 🔄 |
 

@@ -69,3 +69,13 @@ During Phase 1 security & validation testing, Agent Smith discovered two validat
 
 **Recommendation:** Add `ArgumentException.ThrowIfNullOrWhiteSpace()` guards (1 line each) at method entry. Tests already document current behavior. Not blocking Phase 4 implementation but should be hardened before next release.
 
+### 2026-04-08: CLI Project Now References Library
+
+Tank created the ElBruno.HuggingFace.Downloader.Cli project (Phase 1 scaffolding). The CLI tool now references the core library via project reference (`ProjectReference` in .csproj). This means:
+
+- **Library remains stable** — no changes needed to library code
+- **CLI builds against published library APIs** — good integration point for Trinity if API refinements needed
+- **Shared dependency model** — CLI inherits all library dependencies (Extensions, Logging abstractions, etc.)
+
+No action needed from Trinity. Library code remains as-is for CLI consumption.
+
