@@ -1,30 +1,24 @@
 using System.CommandLine;
+using ElBruno.HuggingFace.Cli.Commands;
 
 var rootCommand = new RootCommand(
     "HuggingFace Downloader CLI — download, manage, and inspect cached models from Hugging Face Hub.");
 
-Command[] subcommands =
-[
-    new("download", "Download files from a Hugging Face repository"),
-    new("check", "Check if files exist in the local cache"),
-    new("list", "List downloaded models in the cache directory"),
-    new("info", "Show details of a cached model"),
-    new("delete", "Delete a cached model and all its files"),
-    new("delete-file", "Delete a single file from a cached model"),
-    new("purge", "Delete all cached models"),
-    new("config", "Show or modify configuration"),
-];
+// Download & check commands (Phase 2)
+rootCommand.Add(DownloadCommand.Create());
+rootCommand.Add(CheckCommand.Create());
 
-foreach (var command in subcommands)
-{
-    var name = command.Name;
-    command.SetAction(_ =>
-    {
-        Console.WriteLine($"[{name}] Not yet implemented.");
-    });
+// Cache management commands (Phase 3)
+rootCommand.Add(ListCommand.Create());
+rootCommand.Add(InfoCommand.Create());
+rootCommand.Add(DeleteCommand.Create());
+rootCommand.Add(DeleteFileCommand.Create());
+rootCommand.Add(PurgeCommand.Create());
 
-    rootCommand.Add(command);
-}
+// Stub commands (deferred)
+var configStub = new Command("config", "Show or modify configuration");
+configStub.SetAction(_ => Console.WriteLine("[config] Not yet implemented."));
+rootCommand.Add(configStub);
 
 var config = new CommandLineConfiguration(rootCommand);
 return await config.InvokeAsync(args);
