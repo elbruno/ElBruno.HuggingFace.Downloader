@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src\ElBruno.HuggingFace.Downloader\ElBruno.HuggingFace.Downloader.csproj" />
+    <Project Path="src\ElBruno.HuggingFace.Downloader.Cli\ElBruno.HuggingFace.Downloader.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests\ElBruno.HuggingFace.Downloader.Tests\ElBruno.HuggingFace.Downloader.Tests.csproj" />

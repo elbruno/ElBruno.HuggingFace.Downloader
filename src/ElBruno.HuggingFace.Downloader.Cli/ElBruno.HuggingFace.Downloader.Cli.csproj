@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ElBruno.HuggingFace.Cli</RootNamespace>
+
+    <!-- Dotnet Tool Configuration -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>hfdownload</ToolCommandName>
+    <PackageOutputPath>./nupkg</PackageOutputPath>
+
+    <!-- NuGet Package Metadata -->
+    <PackageId>ElBruno.HuggingFace.Downloader.Cli</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Bruno Capuano</Authors>
+    <Description>A .NET CLI tool to download, manage, and inspect cached files from Hugging Face Hub repositories.</Description>
+    <PackageTags>huggingface;download;cli;dotnet-tool;onnx;model;ml;ai</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/elbruno/ElBruno.HuggingFace.Downloader</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/elbruno/ElBruno.HuggingFace.Downloader</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>logo_02.png</PackageIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ElBruno.HuggingFace.Downloader\ElBruno.HuggingFace.Downloader.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta5.25306.1" />
+    <PackageReference Include="Spectre.Console" Version="0.50.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\images\logo_02.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
