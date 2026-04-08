@@ -6,7 +6,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/elbruno/ElBruno.HuggingFace.Downloader?style=social)](https://github.com/elbruno/ElBruno.HuggingFace.Downloader)
 [![Twitter Follow](https://img.shields.io/twitter/follow/elbruno?style=social)](https://twitter.com/elbruno)
 
-A .NET library to download files (ONNX models, tokenizers, voice presets, etc.) from [Hugging Face Hub](https://huggingface.co) repositories with progress reporting, caching, and authentication support.
+A .NET library and CLI tool to download files (ONNX models, tokenizers, voice presets, etc.) from [Hugging Face Hub](https://huggingface.co) repositories with progress reporting, caching, and authentication support.
 
 ## Features
 
@@ -23,11 +23,40 @@ A .NET library to download files (ONNX models, tokenizers, voice presets, etc.) 
 
 ## Installation
 
+### Library (NuGet)
+
 ```bash
 dotnet add package ElBruno.HuggingFace.Downloader
 ```
 
-## Quick Start
+### CLI Tool
+
+```bash
+dotnet tool install -g ElBruno.HuggingFace.Downloader.Cli
+```
+
+Once installed, use the `hfdownload` command:
+
+```bash
+# Download model files
+hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
+
+# Check if files exist locally
+hfdownload check sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
+
+# List cached models
+hfdownload list
+
+# Delete a cached model
+hfdownload delete sentence-transformers/all-MiniLM-L6-v2
+
+# See all commands
+hfdownload --help
+```
+
+See the full [CLI Reference](docs/CLI_REFERENCE.md) for all commands and options.
+
+## Quick Start (Library)
 
 ### 1) Download model files
 
@@ -120,6 +149,7 @@ public class MyModelService(HuggingFaceDownloader downloader)
 | Topic | Description |
 |-------|-------------|
 | [Getting Started](docs/GETTING_STARTED.md) | Installation, all usage examples, and setup |
+| [CLI Reference](docs/CLI_REFERENCE.md) | Complete CLI command reference |
 | [API Reference](docs/API_REFERENCE.md) | Complete class and method documentation |
 | [Architecture](docs/ARCHITECTURE.md) | Design decisions, data flow, and project structure |
 | [Publishing](docs/publishing.md) | NuGet publishing with GitHub Actions |
