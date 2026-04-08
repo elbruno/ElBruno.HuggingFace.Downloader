@@ -27,6 +27,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ElBruno.HuggingFace.Downloader.Cli.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ElBruno.HuggingFace.Downloader\ElBruno.HuggingFace.Downloader.csproj" />
   </ItemGroup>
 
