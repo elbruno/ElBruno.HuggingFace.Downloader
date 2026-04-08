@@ -28,4 +28,21 @@ This is a .NET library for downloading files from Hugging Face Hub repositories.
 
 ## Learnings
 
-(Append learnings as sessions progress.)
+### Session: README NuGet Packages & Badges Update
+**Date:** 2025  
+**Task:** Add NuGet Packages table and download badge to README.md
+
+**Changes Made:**
+1. Added **NuGet Downloads badge** (line 4) after the existing NuGet version badge. This shows total package downloads from NuGet.org using the `nuget/dt/` badge endpoint with flat-square styling.
+2. Added **"📦 NuGet Packages" section** (lines 25-30) between Features and Installation sections, matching the reference repo format exactly.
+3. **Two-package table** documenting:
+   - **ElBruno.HuggingFace.Downloader** (core library) with version, downloads, and description badges
+   - **ElBruno.HuggingFace.Downloader.Cli** (CLI tool `hfdownload`) with version, downloads, and description badges
+4. All badges are linked to their respective NuGet.org package pages for easy user discovery.
+
+**Rationale:**
+- Follows established project convention (modeled after ElBruno.LocalEmbeddings repo)
+- Makes both packages discoverable and download metrics visible at a glance
+- Improves developer onboarding by clearly separating library vs CLI installation
+- Badge links drive users directly to NuGet.org for install commands
+- Consistent styling and layout supports professional presentation

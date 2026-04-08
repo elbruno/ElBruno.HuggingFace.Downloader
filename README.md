@@ -1,6 +1,7 @@
 # 📥 ElBruno.HuggingFace.Downloader
 
 [![NuGet](https://img.shields.io/nuget/v/ElBruno.HuggingFace.Downloader.svg?style=flat-square&logo=nuget)](https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/ElBruno.HuggingFace.Downloader.svg?style=flat-square&logo=nuget)](https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader)
 [![Build Status](https://github.com/elbruno/ElBruno.HuggingFace.Downloader/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/elbruno/ElBruno.HuggingFace.Downloader/actions/workflows/build-and-test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/elbruno/ElBruno.HuggingFace.Downloader?style=social)](https://github.com/elbruno/ElBruno.HuggingFace.Downloader)
@@ -20,6 +21,13 @@ A .NET library and CLI tool to download files (ONNX models, tokenizers, voice pr
 - 🖥️ **Cross-platform** cache directory helpers (Windows, Linux, macOS)
 - 💉 **DI-friendly** with `IServiceCollection` extension methods
 - 📝 **ILogger integration** for structured logging
+
+## 📦 NuGet Packages
+
+| Package | Version | Downloads | Description |
+|---------|---------|-----------|-------------|
+| [ElBruno.HuggingFace.Downloader](https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader) | [![NuGet](https://img.shields.io/nuget/v/ElBruno.HuggingFace.Downloader.svg?style=flat-square)](https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader) | [![Downloads](https://img.shields.io/nuget/dt/ElBruno.HuggingFace.Downloader.svg?style=flat-square)](https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader) | Core library for downloading files from Hugging Face Hub repositories |
+| [ElBruno.HuggingFace.Downloader.Cli](https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader.Cli) | [![NuGet](https://img.shields.io/nuget/v/ElBruno.HuggingFace.Downloader.Cli.svg?style=flat-square)](https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader.Cli) | [![Downloads](https://img.shields.io/nuget/dt/ElBruno.HuggingFace.Downloader.Cli.svg?style=flat-square)](https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader.Cli) | CLI tool (`hfdownload`) for managing Hugging Face downloads |
 
 ## Installation
 
