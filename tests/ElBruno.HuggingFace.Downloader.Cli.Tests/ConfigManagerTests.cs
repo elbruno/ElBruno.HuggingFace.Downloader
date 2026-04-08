@@ -8,6 +8,7 @@ namespace ElBruno.HuggingFace.Cli.Tests;
 /// Tests for <see cref="ConfigManager"/> — persistent config load/save/reset and value logic.
 /// Disk-touching tests back up and restore the real config file via IDisposable.
 /// </summary>
+[Collection("ConfigFile")]
 public sealed class ConfigManagerTests : IDisposable
 {
     private readonly string _configPath;
