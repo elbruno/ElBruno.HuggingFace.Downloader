@@ -52,7 +52,7 @@ This is the standard workflow — the version is derived from the release tag.
    - `src/ElBruno.HuggingFace.Downloader.Cli/ElBruno.HuggingFace.Downloader.Cli.csproj`
 
    ```xml
-   <Version>1.1.0</Version>
+   <Version>1.2.0</Version>
    ```
 
 2. **NuGet icon source** (already configured):

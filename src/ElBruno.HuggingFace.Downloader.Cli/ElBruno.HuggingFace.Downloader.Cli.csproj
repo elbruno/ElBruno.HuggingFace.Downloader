@@ -14,7 +14,7 @@
 
     <!-- NuGet Package Metadata -->
     <PackageId>ElBruno.HuggingFace.Downloader.Cli</PackageId>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Authors>Bruno Capuano</Authors>
     <Description>A .NET CLI tool to download, manage, and inspect cached files from Hugging Face Hub repositories.</Description>
     <PackageTags>huggingface;download;cli;dotnet-tool;onnx;model;ml;ai</PackageTags>
