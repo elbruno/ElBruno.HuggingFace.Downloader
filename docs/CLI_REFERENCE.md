@@ -34,6 +34,7 @@ hfdownload download <repo-id> <files...> [options]
 | `-t, --token <token>` | Hugging Face auth token (overrides `HF_TOKEN` env var) | — |
 | `--optional` | Treat listed files as optional (skip failures) | `false` |
 | `--no-progress` | Suppress progress bar output | `false` |
+| `--no-resume` | Restart from scratch instead of resuming preserved partial downloads | `false` |
 | `-q, --quiet` | Minimal output (only errors) | `false` |
 
 **Examples:**
@@ -50,6 +51,9 @@ hfdownload download my-org/private-model weights.bin -t hf_your_token
 
 # Download optional files (skip on failure)
 hfdownload download my-org/model config.json --optional
+
+# Disable resumable downloads for a clean restart
+hfdownload download my-org/model weights.bin --no-resume
 
 # Quiet mode for scripts
 hfdownload download my-org/model weights.bin -q

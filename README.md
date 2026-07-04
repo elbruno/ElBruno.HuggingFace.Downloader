@@ -15,6 +15,7 @@ A .NET library and CLI tool to download files (ONNX models, tokenizers, voice pr
 - 📊 **Rich progress reporting** with stages (Checking → Downloading → Validating → Complete)
 - 🔑 **HF_TOKEN authentication** for gated/private repositories (env var or explicit)
 - 🔒 **Atomic writes** using temp files to avoid partial/corrupt downloads
+- 🔁 **Resumable downloads** using HTTP range requests for interrupted large files
 - ✅ **Required vs optional files** — optional files fail silently
 - 📏 **HEAD requests** to resolve total download size before starting
 - ⏭️ **Skip existing files** — only downloads what's missing
@@ -48,6 +49,9 @@ Once installed, use the `hfdownload` command:
 ```bash
 # Download model files
 hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
+
+# Restart from scratch instead of resuming a preserved partial download
+hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx --no-resume
 
 # Check if files exist locally
 hfdownload check sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
@@ -104,7 +108,7 @@ if (!ready)
 var progress = new Progress<DownloadProgress>(p =>
 {
     if (p.Stage == DownloadStage.Downloading)
-        Console.Write($"\r⬇️ [{p.CurrentFile}] {p.PercentComplete:F0}%");
+        Console.Write($"\r⬇️ [{p.CurrentFile}] {p.PercentComplete:F0}% (reused {ByteFormatHelper.FormatBytes(p.ResumedBytes)})");
     else
         Console.WriteLine($"{p.Stage}: {p.Message}");
 });

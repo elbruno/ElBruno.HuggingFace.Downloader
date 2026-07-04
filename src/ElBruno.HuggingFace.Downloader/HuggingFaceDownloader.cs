@@ -1,4 +1,6 @@
+using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -9,6 +11,10 @@ namespace ElBruno.HuggingFace;
 /// </summary>
 public sealed class HuggingFaceDownloader : IDisposable
 {
+    private const string PartialFileSuffix = ".partial";
+    private const string PartialMetadataSuffix = ".partial.json";
+    private const string AtomicTempFileSuffix = ".tmp";
+
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
     private readonly HuggingFaceDownloaderOptions _options;
@@ -78,7 +84,6 @@ public sealed class HuggingFaceDownloader : IDisposable
 
         Directory.CreateDirectory(request.LocalDirectory);
 
-        // Build combined file list with required/optional flag
         var allFiles = new List<(string path, bool required)>(request.RequiredFiles.Count + (request.OptionalFiles?.Count ?? 0));
         foreach (var f in request.RequiredFiles)
             allFiles.Add((f, true));
@@ -86,7 +91,6 @@ public sealed class HuggingFaceDownloader : IDisposable
             foreach (var f in request.OptionalFiles)
                 allFiles.Add((f, false));
 
-        // Filter to only missing files
         var missingFiles = allFiles
             .Where(f => !File.Exists(Path.Combine(request.LocalDirectory, f.path.Replace('/', Path.DirectorySeparatorChar))))
             .ToList();
@@ -103,9 +107,11 @@ public sealed class HuggingFaceDownloader : IDisposable
             return;
         }
 
-        // Resolve total size via HEAD requests
         long totalBytes = 0;
+        long completedBytes = 0;
+        long totalResumedBytes = 0;
         var fileSizes = new Dictionary<string, long>();
+        var remoteFileInfos = new Dictionary<string, RemoteFileInfo?>();
 
         if (_options.ResolveFileSizesBeforeDownload)
         {
@@ -114,31 +120,30 @@ public sealed class HuggingFaceDownloader : IDisposable
                 Stage = DownloadStage.Checking,
                 Message = $"Checking {missingFiles.Count} files from {request.RepoId}..."
             });
-
-            foreach (var (path, _) in missingFiles)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, path, request.Revision);
-                try
-                {
-                    using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
-                    using var headResponse = await _httpClient.SendAsync(headRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-                    if (headResponse.IsSuccessStatusCode && headResponse.Content.Headers.ContentLength is > 0)
-                    {
-                        var size = headResponse.Content.Headers.ContentLength.Value;
-                        fileSizes[path] = size;
-                        totalBytes += size;
-                    }
-                }
-                catch
-                {
-                    // HEAD failed — continue without size info
-                }
-            }
         }
 
-        // Download each file
-        long downloadedBytes = 0;
+        foreach (var (path, _) in missingFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var localPath = Path.Combine(request.LocalDirectory, path.Replace('/', Path.DirectorySeparatorChar));
+            var hasPartial = request.UseAtomicWrites
+                && request.ResumePartialDownloads
+                && File.Exists(GetPartialFilePath(localPath));
+
+            if (!_options.ResolveFileSizesBeforeDownload && !hasPartial)
+                continue;
+
+            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, path, request.Revision);
+            var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
+            remoteFileInfos[path] = remoteInfo;
+
+            if (remoteInfo?.ContentLength is > 0)
+            {
+                fileSizes[path] = remoteInfo.ContentLength.Value;
+                totalBytes += remoteInfo.ContentLength.Value;
+            }
+        }
 
         for (int i = 0; i < missingFiles.Count; i++)
         {
@@ -151,40 +156,40 @@ public sealed class HuggingFaceDownloader : IDisposable
                 Directory.CreateDirectory(localDir);
 
             var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, filePath, request.Revision);
-
-            request.Progress?.Report(new DownloadProgress
-            {
-                Stage = DownloadStage.Downloading,
-                PercentComplete = totalBytes > 0 ? (double)downloadedBytes / totalBytes * 100 : 0,
-                BytesDownloaded = downloadedBytes,
-                TotalBytes = totalBytes,
-                CurrentFile = filePath,
-                CurrentFileIndex = i + 1,
-                TotalFileCount = missingFiles.Count,
-                Message = $"[{i + 1}/{missingFiles.Count}] Downloading {filePath}..."
-            });
-
-            _logger.LogInformation("Downloading {File} from {Url}", filePath, url);
+            var remoteInfo = remoteFileInfos.GetValueOrDefault(filePath);
 
             try
             {
-                var fileDownloadedBytes = await DownloadSingleFileAsync(
-                    url, localPath, filePath, request, i, missingFiles.Count,
-                    fileSizes.GetValueOrDefault(filePath), downloadedBytes, totalBytes,
+                var downloadResult = await DownloadSingleFileAsync(
+                    url,
+                    localPath,
+                    filePath,
+                    request,
+                    i,
+                    missingFiles.Count,
+                    fileSizes.GetValueOrDefault(filePath),
+                    completedBytes,
+                    totalResumedBytes,
+                    totalBytes,
+                    remoteInfo,
                     cancellationToken).ConfigureAwait(false);
 
-                downloadedBytes += fileDownloadedBytes;
+                completedBytes += downloadResult.FileBytes;
+                totalResumedBytes += downloadResult.ResumedBytes;
                 _logger.LogInformation("Successfully downloaded {File}", filePath);
             }
             catch (HttpRequestException) when (!required)
             {
                 _logger.LogWarning("Optional file {File} failed to download, skipping", filePath);
-                continue;
+            }
+            catch (InvalidOperationException) when (!required)
+            {
+                _logger.LogWarning("Optional file {File} failed validation, skipping", filePath);
             }
             catch (HttpRequestException ex) when (required)
             {
                 var statusCode = ex.StatusCode;
-                if (statusCode == System.Net.HttpStatusCode.Unauthorized || statusCode == System.Net.HttpStatusCode.Forbidden)
+                if (statusCode == HttpStatusCode.Unauthorized || statusCode == HttpStatusCode.Forbidden)
                 {
                     throw new InvalidOperationException(
                         $"Access denied downloading '{filePath}'. " +
@@ -192,7 +197,7 @@ public sealed class HuggingFaceDownloader : IDisposable
                         ex);
                 }
 
-                if (statusCode == System.Net.HttpStatusCode.NotFound)
+                if (statusCode == HttpStatusCode.NotFound)
                 {
                     throw new InvalidOperationException(
                         $"File '{filePath}' not found (404).",
@@ -205,110 +210,471 @@ public sealed class HuggingFaceDownloader : IDisposable
             }
         }
 
-        // Validate required files
         request.Progress?.Report(new DownloadProgress
         {
             Stage = DownloadStage.Validating,
             PercentComplete = 99,
-            BytesDownloaded = downloadedBytes,
+            BytesDownloaded = completedBytes,
             TotalBytes = totalBytes,
+            ResumedBytes = totalResumedBytes,
             Message = "Validating downloaded files..."
         });
 
-        var stillMissing = request.RequiredFiles
-            .Where(f => !File.Exists(Path.Combine(request.LocalDirectory, f.Replace('/', Path.DirectorySeparatorChar))))
-            .ToList();
+        var validationErrors = new List<string>();
+        foreach (var file in request.RequiredFiles)
+        {
+            var localPath = Path.Combine(request.LocalDirectory, file.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(localPath))
+            {
+                validationErrors.Add(file);
+                continue;
+            }
 
-        if (stillMissing.Count > 0)
+            if (fileSizes.TryGetValue(file, out var expectedSize))
+            {
+                var actualSize = new FileInfo(localPath).Length;
+                if (actualSize != expectedSize)
+                {
+                    validationErrors.Add($"{file} (expected {expectedSize} bytes, got {actualSize} bytes)");
+                }
+            }
+        }
+
+        if (validationErrors.Count > 0)
         {
             throw new InvalidOperationException(
-                $"Download incomplete. Missing required files: {string.Join(", ", stillMissing)}");
+                $"Download incomplete. Missing or invalid required files: {string.Join(", ", validationErrors)}");
         }
+
+        var completionMessage = totalResumedBytes > 0
+            ? $"All files downloaded and validated. Reused {ByteFormatHelper.FormatBytes(totalResumedBytes)} from partial downloads."
+            : "All files downloaded and validated.";
 
         request.Progress?.Report(new DownloadProgress
         {
             Stage = DownloadStage.Complete,
             PercentComplete = 100,
-            BytesDownloaded = downloadedBytes,
+            BytesDownloaded = completedBytes,
             TotalBytes = totalBytes,
-            Message = "All files downloaded and validated."
+            ResumedBytes = totalResumedBytes,
+            Message = completionMessage
         });
 
-        _logger.LogInformation("Download complete for {RepoId} — {FileCount} files, {Bytes}",
-            request.RepoId, missingFiles.Count, ByteFormatHelper.FormatBytes(downloadedBytes));
+        _logger.LogInformation(
+            "Download complete for {RepoId} — {FileCount} files, {Bytes}, resumed {ResumedBytes}",
+            request.RepoId,
+            missingFiles.Count,
+            ByteFormatHelper.FormatBytes(completedBytes),
+            ByteFormatHelper.FormatBytes(totalResumedBytes));
     }
 
-    private async Task<long> DownloadSingleFileAsync(
-        string url, string localPath, string filePath,
-        DownloadRequest request, int fileIndex, int totalFiles,
-        long expectedFileSize, long previouslyDownloaded, long totalBytes,
+    private async Task<FileDownloadResult> DownloadSingleFileAsync(
+        string url,
+        string localPath,
+        string filePath,
+        DownloadRequest request,
+        int fileIndex,
+        int totalFiles,
+        long expectedFileSize,
+        long previouslyCompletedBytes,
+        long previouslyResumedBytes,
+        long totalBytes,
+        RemoteFileInfo? remoteInfo,
         CancellationToken cancellationToken)
     {
-        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        var downloadState = PrepareDownloadState(localPath, request, remoteInfo);
+        if (downloadState.CompletedWithoutNetwork)
         {
-            throw new HttpRequestException(
-                $"Failed to download file. Status: {response.StatusCode}, URL: {url}",
-                inner: null,
-                statusCode: response.StatusCode);
+            request.Progress?.Report(new DownloadProgress
+            {
+                Stage = DownloadStage.Downloading,
+                PercentComplete = totalBytes > 0 ? (double)(previouslyCompletedBytes + downloadState.ResumedBytes) / totalBytes * 100 : 0,
+                BytesDownloaded = previouslyCompletedBytes + downloadState.ResumedBytes,
+                TotalBytes = totalBytes,
+                ResumedBytes = previouslyResumedBytes + downloadState.ResumedBytes,
+                CurrentFile = filePath,
+                CurrentFileIndex = fileIndex + 1,
+                TotalFileCount = totalFiles,
+                Message = $"[{fileIndex + 1}/{totalFiles}] Recovered completed partial download for {filePath}."
+            });
+
+            return new FileDownloadResult(downloadState.ResumedBytes, downloadState.ResumedBytes);
         }
 
-        var fileSize = response.Content.Headers.ContentLength ?? expectedFileSize;
-        long fileDownloaded = 0;
-
-        var writePath = request.UseAtomicWrites ? localPath + ".tmp" : localPath;
-
-        try
+        while (true)
         {
-            await using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            await using var fileStream = new FileStream(
-                writePath,
-                FileMode.Create,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 81920,
-                useAsync: true);
-
-            var buffer = new byte[81920];
-            int bytesRead;
-
-            while ((bytesRead = await contentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            if (downloadState.ResumedBytes > 0)
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
-                fileDownloaded += bytesRead;
-
                 request.Progress?.Report(new DownloadProgress
                 {
                     Stage = DownloadStage.Downloading,
-                    PercentComplete = totalBytes > 0 ? (double)(previouslyDownloaded + fileDownloaded) / totalBytes * 100 : 0,
-                    BytesDownloaded = previouslyDownloaded + fileDownloaded,
+                    PercentComplete = totalBytes > 0 ? (double)(previouslyCompletedBytes + downloadState.ResumedBytes) / totalBytes * 100 : 0,
+                    BytesDownloaded = previouslyCompletedBytes + downloadState.ResumedBytes,
                     TotalBytes = totalBytes,
+                    ResumedBytes = previouslyResumedBytes + downloadState.ResumedBytes,
                     CurrentFile = filePath,
                     CurrentFileIndex = fileIndex + 1,
                     TotalFileCount = totalFiles,
-                    Message = $"[{fileIndex + 1}/{totalFiles}] {filePath} — {ByteFormatHelper.FormatBytes(fileDownloaded)}/{ByteFormatHelper.FormatBytes(fileSize)}"
+                    Message = $"[{fileIndex + 1}/{totalFiles}] Resuming {filePath} from {ByteFormatHelper.FormatBytes(downloadState.ResumedBytes)}..."
+                });
+            }
+            else
+            {
+                request.Progress?.Report(new DownloadProgress
+                {
+                    Stage = DownloadStage.Downloading,
+                    PercentComplete = totalBytes > 0 ? (double)previouslyCompletedBytes / totalBytes * 100 : 0,
+                    BytesDownloaded = previouslyCompletedBytes,
+                    TotalBytes = totalBytes,
+                    ResumedBytes = previouslyResumedBytes,
+                    CurrentFile = filePath,
+                    CurrentFileIndex = fileIndex + 1,
+                    TotalFileCount = totalFiles,
+                    Message = $"[{fileIndex + 1}/{totalFiles}] Downloading {filePath}..."
                 });
             }
 
-            await fileStream.FlushAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            if (File.Exists(writePath))
+            using var requestMessage = CreateDownloadRequest(url, downloadState.ResumedBytes, downloadState.EntityTag);
+            using var response = await _httpClient.SendAsync(
+                requestMessage,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+
+            if (downloadState.ResumedBytes > 0 && response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
             {
-                try { File.Delete(writePath); } catch { /* cleanup best-effort */ }
+                var remoteLength = response.Content.Headers.ContentRange?.Length ?? downloadState.TotalBytes;
+                if (remoteLength is > 0 && remoteLength.Value == downloadState.ResumedBytes)
+                {
+                    FinalizeCompletedDownload(downloadState.WritePath, localPath, downloadState.MetadataPath, useAtomicWrites: true);
+                    return new FileDownloadResult(downloadState.ResumedBytes, downloadState.ResumedBytes);
+                }
+
+                _logger.LogInformation("Server rejected resume for {File}; restarting full download", filePath);
+                CleanupDownloadArtifacts(downloadState.WritePath, downloadState.MetadataPath, request.UseAtomicWrites, keepPartial: false);
+                downloadState = CreateFreshDownloadState(localPath, request);
+                continue;
             }
-            throw;
-        }
 
-        if (request.UseAtomicWrites)
-        {
-            File.Move(writePath, localPath, overwrite: true);
-        }
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException(
+                    $"Failed to download file. Status: {response.StatusCode}, URL: {url}",
+                    inner: null,
+                    statusCode: response.StatusCode);
+            }
 
-        return fileDownloaded;
+            if (downloadState.ResumedBytes > 0)
+            {
+                var responseEntityTag = response.Headers.ETag?.ToString();
+                if (response.StatusCode == HttpStatusCode.OK
+                    || (responseEntityTag is not null
+                        && downloadState.EntityTag is not null
+                        && !string.Equals(responseEntityTag, downloadState.EntityTag, StringComparison.Ordinal)))
+                {
+                    _logger.LogInformation("Resume could not continue safely for {File}; restarting full download", filePath);
+                    CleanupDownloadArtifacts(downloadState.WritePath, downloadState.MetadataPath, request.UseAtomicWrites, keepPartial: false);
+                    downloadState = CreateFreshDownloadState(localPath, request);
+                    continue;
+                }
+            }
+
+            var resolvedEntityTag = response.Headers.ETag?.ToString() ?? remoteInfo?.EntityTag ?? downloadState.EntityTag;
+            var resolvedTotalBytes = ResolveExpectedFileSize(response, expectedFileSize, remoteInfo, downloadState.TotalBytes);
+            if (resolvedTotalBytes > 0)
+            {
+                expectedFileSize = resolvedTotalBytes;
+            }
+
+            if (downloadState.AllowResume)
+            {
+                PersistPartialMetadata(downloadState.MetadataPath!, new PartialDownloadMetadata
+                {
+                    Revision = request.Revision,
+                    EntityTag = resolvedEntityTag,
+                    TotalBytes = resolvedTotalBytes > 0 ? resolvedTotalBytes : null
+                });
+            }
+
+            long downloadedThisAttempt = 0;
+
+            try
+            {
+                await using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                await using var fileStream = new FileStream(
+                    downloadState.WritePath,
+                    downloadState.ResumedBytes > 0 ? FileMode.Append : FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    bufferSize: 81920,
+                    useAsync: true);
+
+                var buffer = new byte[81920];
+                while (true)
+                {
+                    var bytesRead = await contentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    if (bytesRead == 0)
+                        break;
+
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
+                    downloadedThisAttempt += bytesRead;
+
+                    var availableBytes = downloadState.ResumedBytes + downloadedThisAttempt;
+                    request.Progress?.Report(new DownloadProgress
+                    {
+                        Stage = DownloadStage.Downloading,
+                        PercentComplete = totalBytes > 0 ? (double)(previouslyCompletedBytes + availableBytes) / totalBytes * 100 : 0,
+                        BytesDownloaded = previouslyCompletedBytes + availableBytes,
+                        TotalBytes = totalBytes,
+                        ResumedBytes = previouslyResumedBytes + downloadState.ResumedBytes,
+                        CurrentFile = filePath,
+                        CurrentFileIndex = fileIndex + 1,
+                        TotalFileCount = totalFiles,
+                        Message = BuildProgressMessage(fileIndex, totalFiles, filePath, availableBytes, resolvedTotalBytes, downloadState.ResumedBytes)
+                    });
+                }
+
+                await fileStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception) when (downloadState.AllowResume && GetFileLength(downloadState.WritePath) > 0)
+            {
+                _logger.LogInformation("Preserving partial download for {File} at {Path}", filePath, downloadState.WritePath);
+                throw;
+            }
+            catch
+            {
+                CleanupDownloadArtifacts(downloadState.WritePath, downloadState.MetadataPath, request.UseAtomicWrites, keepPartial: false);
+                throw;
+            }
+
+            var finalFileBytes = downloadState.ResumedBytes + downloadedThisAttempt;
+            if (resolvedTotalBytes > 0 && finalFileBytes != resolvedTotalBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Downloaded size mismatch for '{filePath}'. Expected {resolvedTotalBytes} bytes but found {finalFileBytes} bytes.");
+            }
+
+            FinalizeCompletedDownload(downloadState.WritePath, localPath, downloadState.MetadataPath, request.UseAtomicWrites);
+            return new FileDownloadResult(finalFileBytes, downloadState.ResumedBytes);
+        }
     }
+
+    private async Task<RemoteFileInfo?> TryGetRemoteFileInfoAsync(string url, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var headRequest = new HttpRequestMessage(HttpMethod.Head, url);
+            using var headResponse = await _httpClient.SendAsync(
+                headRequest,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+
+            if (!headResponse.IsSuccessStatusCode)
+                return null;
+
+            return new RemoteFileInfo(
+                headResponse.Content.Headers.ContentLength,
+                headResponse.Headers.ETag?.ToString(),
+                headResponse.Headers.AcceptRanges.Any(value => string.Equals(value, "bytes", StringComparison.OrdinalIgnoreCase)));
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    private static DownloadState PrepareDownloadState(string localPath, DownloadRequest request, RemoteFileInfo? remoteInfo)
+    {
+        if (!request.UseAtomicWrites)
+        {
+            CleanupDownloadArtifacts(localPath, metadataPath: null, useAtomicWrites: false, keepPartial: false);
+            CleanupResumeArtifacts(localPath);
+            return new DownloadState(localPath, null, false, 0, null, null, false);
+        }
+
+        if (!request.ResumePartialDownloads)
+        {
+            CleanupResumeArtifacts(localPath);
+            return new DownloadState(GetAtomicTempPath(localPath), null, false, 0, null, null, false);
+        }
+
+        var partialPath = GetPartialFilePath(localPath);
+        var metadataPath = GetPartialMetadataPath(localPath);
+
+        if (!File.Exists(partialPath))
+        {
+            DeleteIfExists(metadataPath);
+            return new DownloadState(partialPath, metadataPath, true, 0, remoteInfo?.EntityTag, remoteInfo?.ContentLength, false);
+        }
+
+        var metadata = TryReadPartialMetadata(metadataPath);
+        if (metadata is null)
+        {
+            CleanupResumeArtifacts(localPath);
+            return new DownloadState(partialPath, metadataPath, true, 0, remoteInfo?.EntityTag, remoteInfo?.ContentLength, false);
+        }
+
+        var partialLength = GetFileLength(partialPath);
+        if (metadata.Revision != request.Revision)
+        {
+            CleanupResumeArtifacts(localPath);
+            return new DownloadState(partialPath, metadataPath, true, 0, remoteInfo?.EntityTag, remoteInfo?.ContentLength, false);
+        }
+
+        if (metadata.TotalBytes is > 0 && partialLength > metadata.TotalBytes.Value)
+        {
+            CleanupResumeArtifacts(localPath);
+            return new DownloadState(partialPath, metadataPath, true, 0, remoteInfo?.EntityTag, remoteInfo?.ContentLength, false);
+        }
+
+        if (remoteInfo?.EntityTag is not null
+            && metadata.EntityTag is not null
+            && !string.Equals(remoteInfo.EntityTag, metadata.EntityTag, StringComparison.Ordinal))
+        {
+            CleanupResumeArtifacts(localPath);
+            return new DownloadState(partialPath, metadataPath, true, 0, remoteInfo.EntityTag, remoteInfo.ContentLength, false);
+        }
+
+        if (remoteInfo?.ContentLength is > 0
+            && metadata.TotalBytes is > 0
+            && remoteInfo.ContentLength.Value != metadata.TotalBytes.Value)
+        {
+            CleanupResumeArtifacts(localPath);
+            return new DownloadState(partialPath, metadataPath, true, 0, remoteInfo.EntityTag, remoteInfo.ContentLength, false);
+        }
+
+        var totalBytes = remoteInfo?.ContentLength ?? metadata.TotalBytes;
+        if (totalBytes is > 0 && partialLength == totalBytes.Value)
+        {
+            FinalizeCompletedDownload(partialPath, localPath, metadataPath, useAtomicWrites: true);
+            return new DownloadState(partialPath, metadataPath, true, partialLength, metadata.EntityTag ?? remoteInfo?.EntityTag, totalBytes, true);
+        }
+
+        return new DownloadState(
+            partialPath,
+            metadataPath,
+            true,
+            partialLength,
+            metadata.EntityTag ?? remoteInfo?.EntityTag,
+            totalBytes,
+            false);
+    }
+
+    private static DownloadState CreateFreshDownloadState(string localPath, DownloadRequest request)
+    {
+        return request.UseAtomicWrites && request.ResumePartialDownloads
+            ? new DownloadState(GetPartialFilePath(localPath), GetPartialMetadataPath(localPath), true, 0, null, null, false)
+            : request.UseAtomicWrites
+                ? new DownloadState(GetAtomicTempPath(localPath), null, false, 0, null, null, false)
+                : new DownloadState(localPath, null, false, 0, null, null, false);
+    }
+
+    private static HttpRequestMessage CreateDownloadRequest(string url, long resumedBytes, string? entityTag)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (resumedBytes > 0)
+        {
+            request.Headers.Range = new RangeHeaderValue(resumedBytes, null);
+            if (!string.IsNullOrWhiteSpace(entityTag))
+                request.Headers.TryAddWithoutValidation("If-Range", entityTag);
+        }
+
+        return request;
+    }
+
+    private static long ResolveExpectedFileSize(
+        HttpResponseMessage response,
+        long expectedFileSize,
+        RemoteFileInfo? remoteInfo,
+        long? preparedTotalBytes)
+    {
+        if (response.Content.Headers.ContentRange?.Length is { } contentRangeLength)
+            return contentRangeLength;
+        if (response.StatusCode == HttpStatusCode.OK && response.Content.Headers.ContentLength is { } contentLength)
+            return contentLength;
+        if (remoteInfo?.ContentLength is { } remoteLength)
+            return remoteLength;
+        if (preparedTotalBytes is { } preparedLength)
+            return preparedLength;
+
+        return expectedFileSize;
+    }
+
+    private static string BuildProgressMessage(int fileIndex, int totalFiles, string filePath, long availableBytes, long totalBytes, long resumedBytes)
+    {
+        var prefix = $"[{fileIndex + 1}/{totalFiles}] {filePath} — ";
+        var progress = $"{ByteFormatHelper.FormatBytes(availableBytes)}/{ByteFormatHelper.FormatBytes(totalBytes)}";
+        if (resumedBytes <= 0)
+            return prefix + progress;
+
+        return prefix + $"resumed {ByteFormatHelper.FormatBytes(resumedBytes)}, {progress}";
+    }
+
+    private static PartialDownloadMetadata? TryReadPartialMetadata(string metadataPath)
+    {
+        if (!File.Exists(metadataPath))
+            return null;
+
+        try
+        {
+            var json = File.ReadAllText(metadataPath);
+            return JsonSerializer.Deserialize<PartialDownloadMetadata>(json);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    private static void PersistPartialMetadata(string metadataPath, PartialDownloadMetadata metadata)
+    {
+        var json = JsonSerializer.Serialize(metadata);
+        File.WriteAllText(metadataPath, json);
+    }
+
+    private static void FinalizeCompletedDownload(string writePath, string localPath, string? metadataPath, bool useAtomicWrites)
+    {
+        if (useAtomicWrites)
+            File.Move(writePath, localPath, overwrite: true);
+
+        if (!string.IsNullOrEmpty(metadataPath))
+            DeleteIfExists(metadataPath);
+    }
+
+    private static void CleanupDownloadArtifacts(string writePath, string? metadataPath, bool useAtomicWrites, bool keepPartial)
+    {
+        if (!keepPartial || !useAtomicWrites)
+            DeleteIfExists(writePath);
+
+        if (!keepPartial && !string.IsNullOrEmpty(metadataPath))
+            DeleteIfExists(metadataPath);
+    }
+
+    private static void CleanupResumeArtifacts(string localPath)
+    {
+        DeleteIfExists(GetPartialFilePath(localPath));
+        DeleteIfExists(GetPartialMetadataPath(localPath));
+    }
+
+    private static void DeleteIfExists(string path)
+    {
+        if (File.Exists(path))
+            File.Delete(path);
+    }
+
+    private static long GetFileLength(string path)
+    {
+        return File.Exists(path) ? new FileInfo(path).Length : 0;
+    }
+
+    private static string GetAtomicTempPath(string localPath) => localPath + AtomicTempFileSuffix;
+
+    private static string GetPartialFilePath(string localPath) => localPath + PartialFileSuffix;
+
+    private static string GetPartialMetadataPath(string localPath) => localPath + PartialMetadataSuffix;
 
     private static HttpClient CreateHttpClient(HuggingFaceDownloaderOptions options)
     {
@@ -332,5 +698,27 @@ public sealed class HuggingFaceDownloader : IDisposable
     {
         if (_ownsHttpClient)
             _httpClient.Dispose();
+    }
+
+    private sealed record RemoteFileInfo(long? ContentLength, string? EntityTag, bool SupportsRanges);
+
+    private sealed record DownloadState(
+        string WritePath,
+        string? MetadataPath,
+        bool AllowResume,
+        long ResumedBytes,
+        string? EntityTag,
+        long? TotalBytes,
+        bool CompletedWithoutNetwork);
+
+    private sealed record FileDownloadResult(long FileBytes, long ResumedBytes);
+
+    private sealed class PartialDownloadMetadata
+    {
+        public required string Revision { get; init; }
+
+        public string? EntityTag { get; init; }
+
+        public long? TotalBytes { get; init; }
     }
 }

@@ -17,6 +17,9 @@ public sealed class DownloadProgress
     /// <summary>Total bytes expected across all files (0 if unknown).</summary>
     public long TotalBytes { get; init; }
 
+    /// <summary>Total bytes reused from preserved partial downloads.</summary>
+    public long ResumedBytes { get; init; }
+
     /// <summary>Name of the file currently being downloaded, or null.</summary>
     public string? CurrentFile { get; init; }
 

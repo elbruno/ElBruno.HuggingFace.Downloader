@@ -7,6 +7,7 @@ This guide covers how to publish new versions of **ElBruno.HuggingFace.Downloade
 | Package | Project | Description |
 |---------|---------|-------------|
 | `ElBruno.HuggingFace.Downloader` | `src/ElBruno.HuggingFace.Downloader/` | .NET library for downloading files from Hugging Face Hub |
+| `ElBruno.HuggingFace.Downloader.Cli` | `src/ElBruno.HuggingFace.Downloader.Cli/` | .NET global tool (`hfdownload`) for downloading and managing Hugging Face files |
 
 > **Maintenance rule:** If a new packable library is added under `src/`, update `.github/workflows/publish.yml` in the same PR so the new project is packed/pushed, and add a matching NuGet Trusted Publishing policy.
 
@@ -45,12 +46,13 @@ These steps only need to be done once.
 
 This is the standard workflow — the version is derived from the release tag.
 
-1. **Update the version** in the csproj file:
+1. **Update the version** in the csproj files:
 
    - `src/ElBruno.HuggingFace.Downloader/ElBruno.HuggingFace.Downloader.csproj`
+   - `src/ElBruno.HuggingFace.Downloader.Cli/ElBruno.HuggingFace.Downloader.Cli.csproj`
 
    ```xml
-   <Version>1.2.0</Version>
+   <Version>1.1.0</Version>
    ```
 
 2. **NuGet icon source** (already configured):
