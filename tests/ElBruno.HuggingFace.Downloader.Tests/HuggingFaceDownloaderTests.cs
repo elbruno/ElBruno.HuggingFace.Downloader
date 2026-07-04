@@ -1,4 +1,7 @@
 using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using ElBruno.HuggingFace;
 using Xunit;
 
@@ -401,6 +404,18 @@ public class HuggingFaceDownloaderTests : IDisposable
     }
 
     [Fact]
+    public void DownloadRequest_DefaultResumePartialDownloads_IsTrue()
+    {
+        var request = new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["file.txt"]
+        };
+        Assert.True(request.ResumePartialDownloads);
+    }
+
+    [Fact]
     public void DownloadRequest_DefaultProgress_IsNull()
     {
         var request = new DownloadRequest
@@ -466,17 +481,67 @@ public class HuggingFaceDownloaderTests : IDisposable
         }
     }
 
+    private sealed class PartialCancellingStream(byte[] data, CancellationTokenSource cts, int firstChunkSize) : MemoryStream(data)
+    {
+        private bool _returnedFirstChunk;
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (!_returnedFirstChunk)
+            {
+                _returnedFirstChunk = true;
+                var length = Math.Min(firstChunkSize, (int)(Length - Position));
+                return base.ReadAsync(buffer[..length], cancellationToken);
+            }
+
+            cts.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            return base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
     private static HttpResponseMessage CreateFileResponse(string content) =>
         new(HttpStatusCode.OK) { Content = new StringContent(content) };
 
-    private static HttpResponseMessage CreateHeadResponse(long contentLength)
+    private static HttpResponseMessage CreateHeadResponse(long contentLength, string? entityTag = null, bool supportsRanges = false)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new ByteArrayContent([])
         };
         response.Content.Headers.ContentLength = contentLength;
+        if (entityTag is not null)
+            response.Headers.ETag = EntityTagHeaderValue.Parse(entityTag);
+        if (supportsRanges)
+            response.Headers.AcceptRanges.Add("bytes");
         return response;
+    }
+
+    private static HttpResponseMessage CreateRangeResponse(byte[] content, long from, string? entityTag = null)
+    {
+        var rangeContent = content[(int)from..];
+        var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
+        {
+            Content = new ByteArrayContent(rangeContent)
+        };
+        response.Content.Headers.ContentLength = rangeContent.Length;
+        response.Content.Headers.ContentRange = new ContentRangeHeaderValue(from, content.Length - 1, content.Length);
+        if (entityTag is not null)
+            response.Headers.ETag = EntityTagHeaderValue.Parse(entityTag);
+        return response;
+    }
+
+    private static void WritePartialDownload(string localPath, byte[] content, string revision, string? entityTag, long? totalBytes)
+    {
+        File.WriteAllBytes(localPath + ".partial", content);
+
+        var metadata = JsonSerializer.Serialize(new
+        {
+            Revision = revision,
+            EntityTag = entityTag,
+            TotalBytes = totalBytes
+        });
+        File.WriteAllText(localPath + ".partial.json", metadata);
     }
 
     #endregion
@@ -780,7 +845,7 @@ public class HuggingFaceDownloaderTests : IDisposable
             if (request.Method == HttpMethod.Head)
             {
                 Interlocked.Increment(ref headRequestCount);
-                return Task.FromResult(CreateHeadResponse(100));
+                return Task.FromResult(CreateHeadResponse(4));
             }
             return Task.FromResult(CreateFileResponse("data"));
         });
@@ -850,6 +915,147 @@ public class HuggingFaceDownloaderTests : IDisposable
 
         Assert.True(File.Exists(Path.Combine(_tempDir, "file.txt")));
         Assert.Equal("data despite HEAD failure", await File.ReadAllTextAsync(Path.Combine(_tempDir, "file.txt")));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_PartialFileExists_ResumesWithRangeRequest()
+    {
+        const string entityTag = "\"etag-1\"";
+        var fullContent = Encoding.UTF8.GetBytes("hello world");
+        var localPath = Path.Combine(_tempDir, "model.bin");
+        WritePartialDownload(localPath, Encoding.UTF8.GetBytes("hello "), "main", entityTag, fullContent.Length);
+
+        RangeHeaderValue? observedRange = null;
+        var progressReports = new List<DownloadProgress>();
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(CreateHeadResponse(fullContent.Length, entityTag, supportsRanges: true));
+
+            observedRange = request.Headers.Range;
+            return Task.FromResult(CreateRangeResponse(fullContent, 6, entityTag));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.bin"],
+            Progress = new SynchronousProgress<DownloadProgress>(p => progressReports.Add(p))
+        });
+
+        Assert.NotNull(observedRange);
+        Assert.Equal(6, observedRange!.Ranges.Single().From);
+        Assert.Equal("hello world", await File.ReadAllTextAsync(localPath));
+        Assert.False(File.Exists(localPath + ".partial"));
+        Assert.False(File.Exists(localPath + ".partial.json"));
+        Assert.Contains(progressReports, p => p.ResumedBytes == 6);
+        Assert.Contains(progressReports, p => p.Message?.Contains("Reused", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_PartialFileFromDifferentRevision_RestartsFromScratch()
+    {
+        const string entityTag = "\"etag-1\"";
+        var localPath = Path.Combine(_tempDir, "model.bin");
+        WritePartialDownload(localPath, Encoding.UTF8.GetBytes("stale"), "old-branch", entityTag, 11);
+
+        var rangedRequests = 0;
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(CreateHeadResponse(11, entityTag, supportsRanges: true));
+
+            if (request.Headers.Range is not null)
+                rangedRequests++;
+
+            return Task.FromResult(CreateFileResponse("new content"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.bin"],
+            Revision = "main"
+        });
+
+        Assert.Equal(0, rangedRequests);
+        Assert.Equal("new content", await File.ReadAllTextAsync(localPath));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_PartialFileWithChangedEtag_RestartsFromScratch()
+    {
+        var localPath = Path.Combine(_tempDir, "model.bin");
+        WritePartialDownload(localPath, Encoding.UTF8.GetBytes("hello "), "main", "\"etag-old\"", 11);
+
+        var rangedRequests = 0;
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(CreateHeadResponse(11, "\"etag-new\"", supportsRanges: true));
+
+            if (request.Headers.Range is not null)
+                rangedRequests++;
+
+            return Task.FromResult(CreateFileResponse("new content"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.bin"]
+        });
+
+        Assert.Equal(0, rangedRequests);
+        Assert.Equal("new content", await File.ReadAllTextAsync(localPath));
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_ServerIgnoresRange_RestartsWithFullDownload()
+    {
+        const string entityTag = "\"etag-1\"";
+        var fullContent = "hello world";
+        var localPath = Path.Combine(_tempDir, "model.bin");
+        WritePartialDownload(localPath, Encoding.UTF8.GetBytes("hello "), "main", entityTag, fullContent.Length);
+
+        var seenRanges = new List<bool>();
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(CreateHeadResponse(fullContent.Length, entityTag, supportsRanges: false));
+
+            seenRanges.Add(request.Headers.Range is not null);
+            return Task.FromResult(CreateFileResponse(fullContent));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.bin"]
+        });
+
+        Assert.Equal([true, false], seenRanges);
+        Assert.Equal(fullContent, await File.ReadAllTextAsync(localPath));
     }
 
     #endregion
@@ -1026,15 +1232,49 @@ public class HuggingFaceDownloaderTests : IDisposable
     }
 
     [Fact]
-    public async Task DownloadFilesAsync_CancelledDuringDownload_CleansTempFile()
+    public async Task DownloadFilesAsync_CancelledDuringDownload_PreservesPartialFileWhenResumeEnabled()
     {
         using var cts = new CancellationTokenSource();
+        var localPath = Path.Combine(_tempDir, "model.onnx");
 
         var handler = new MockHttpMessageHandler((request, _) =>
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StreamContent(new CancellingStream(new byte[1024], cts))
+                Content = new StreamContent(new PartialCancellingStream(new byte[1024], cts, firstChunkSize: 256))
+            };
+            return Task.FromResult(response);
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["model.onnx"]
+            }, cts.Token));
+
+        Assert.False(File.Exists(localPath));
+        Assert.True(File.Exists(localPath + ".partial"));
+        Assert.True(File.Exists(localPath + ".partial.json"));
+        Assert.Equal(256, new FileInfo(localPath + ".partial").Length);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_CancelledDuringDownload_WithoutResume_CleansTemporaryFiles()
+    {
+        using var cts = new CancellationTokenSource();
+        var localPath = Path.Combine(_tempDir, "model.onnx");
+
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new PartialCancellingStream(new byte[1024], cts, firstChunkSize: 256))
             };
             return Task.FromResult(response);
         });
@@ -1049,11 +1289,13 @@ public class HuggingFaceDownloaderTests : IDisposable
                 RepoId = "test/repo",
                 LocalDirectory = _tempDir,
                 RequiredFiles = ["model.onnx"],
-                UseAtomicWrites = true
+                ResumePartialDownloads = false
             }, cts.Token));
 
-        Assert.False(File.Exists(Path.Combine(_tempDir, "model.onnx.tmp")));
-        Assert.False(File.Exists(Path.Combine(_tempDir, "model.onnx")));
+        Assert.False(File.Exists(localPath));
+        Assert.False(File.Exists(localPath + ".tmp"));
+        Assert.False(File.Exists(localPath + ".partial"));
+        Assert.False(File.Exists(localPath + ".partial.json"));
     }
 
     [Fact]
@@ -1225,6 +1467,7 @@ public class DownloadProgressTests
             PercentComplete = 50.5,
             BytesDownloaded = 1024,
             TotalBytes = 2048,
+            ResumedBytes = 512,
             CurrentFile = "model.onnx",
             CurrentFileIndex = 1,
             TotalFileCount = 3,
@@ -1235,6 +1478,7 @@ public class DownloadProgressTests
         Assert.Equal(50.5, progress.PercentComplete);
         Assert.Equal(1024, progress.BytesDownloaded);
         Assert.Equal(2048, progress.TotalBytes);
+        Assert.Equal(512, progress.ResumedBytes);
         Assert.Equal("model.onnx", progress.CurrentFile);
         Assert.Equal(1, progress.CurrentFileIndex);
         Assert.Equal(3, progress.TotalFileCount);
@@ -1250,6 +1494,7 @@ public class DownloadProgressTests
         Assert.Equal(0, progress.PercentComplete);
         Assert.Equal(0, progress.BytesDownloaded);
         Assert.Equal(0, progress.TotalBytes);
+        Assert.Equal(0, progress.ResumedBytes);
         Assert.Null(progress.CurrentFile);
         Assert.Equal(0, progress.CurrentFileIndex);
         Assert.Equal(0, progress.TotalFileCount);

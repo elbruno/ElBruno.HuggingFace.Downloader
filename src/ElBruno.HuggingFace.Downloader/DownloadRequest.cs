@@ -41,4 +41,10 @@ public sealed class DownloadRequest
     /// Defaults to true.
     /// </summary>
     public bool UseAtomicWrites { get; init; } = true;
+
+    /// <summary>
+    /// When true, interrupted atomic downloads are resumed from preserved partial files when the remote file still matches.
+    /// Defaults to true.
+    /// </summary>
+    public bool ResumePartialDownloads { get; init; } = true;
 }

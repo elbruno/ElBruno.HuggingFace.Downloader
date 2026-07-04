@@ -176,7 +176,7 @@ public class AuthenticationAndConfigurationTests : IDisposable
                 {
                     Content = new ByteArrayContent([])
                 };
-                headResp.Content.Headers.ContentLength = 100;
+                headResp.Content.Headers.ContentLength = 4;
                 return Task.FromResult(headResp);
             }
             return Task.FromResult(CreateFileResponse("data"));

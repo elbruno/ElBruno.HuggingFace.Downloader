@@ -31,9 +31,10 @@
 │    ├─ 2. Filter to missing files only       │
 │    ├─ 3. HEAD requests for total size       │
 │    ├─ 4. Download each file (streaming)     │
-│    │     ├─ Write to .tmp (atomic)          │
+│    │     ├─ Reuse .partial when safe        │
+│    │     ├─ Send HTTP range requests        │
 │    │     ├─ Report per-byte progress        │
-│    │     └─ Rename .tmp → final             │
+│    │     └─ Rename temp file → final        │
 │    ├─ 5. Validate all required files exist  │
 │    └─ 6. Report Complete                    │
 │                                             │
@@ -57,13 +58,15 @@ https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/
 
 ## Atomic Writes
 
-When `UseAtomicWrites` is enabled (default), files are downloaded to a `.tmp` suffix first:
+When `UseAtomicWrites` is enabled (default), incomplete downloads are written to a resumable `.partial` file plus a small metadata sidecar:
 
 ```
-model.onnx.tmp  →  (download complete)  →  model.onnx
+model.onnx.partial
+model.onnx.partial.json
+  →  (download complete and validated)  →  model.onnx
 ```
 
-This prevents consumers from reading a partially-downloaded file. If the download fails, the `.tmp` file is cleaned up automatically.
+If the request is retried and the remote file still matches the saved revision and ETag, the downloader resumes with an HTTP range request. If the remote changed or the server ignores ranges, the partial artifacts are discarded and the file restarts from byte zero.
 
 ## Authentication
 
@@ -82,7 +85,9 @@ The token is sent as a `Bearer` token in the `Authorization` HTTP header.
 | Required file returns 404 | `InvalidOperationException` with file not found message |
 | Required file returns other error | `InvalidOperationException` wrapping `HttpRequestException` |
 | Optional file fails | Silently skipped, logged as warning |
-| Download partially completes | `.tmp` file is deleted on failure |
+| Download partially completes with resume enabled | `.partial` artifacts are preserved for the next retry |
+| Remote revision or ETag changes | Preserved partial download is discarded and restarted |
+| Server ignores range requests | Preserved partial download is discarded and restarted |
 | All downloads complete but required file missing | `InvalidOperationException` listing missing files |
 
 ## Project Structure

@@ -56,7 +56,7 @@ var progress = new Progress<DownloadProgress>(p =>
             Console.WriteLine($"🔍 {p.Message}");
             break;
         case DownloadStage.Downloading:
-            Console.Write($"\r⬇️ [{p.CurrentFileIndex}/{p.TotalFileCount}] {p.CurrentFile} — {p.PercentComplete:F0}%");
+            Console.Write($"\r⬇️ [{p.CurrentFileIndex}/{p.TotalFileCount}] {p.CurrentFile} — {p.PercentComplete:F0}% (reused {ByteFormatHelper.FormatBytes(p.ResumedBytes)})");
             break;
         case DownloadStage.Validating:
             Console.WriteLine($"\n✅ {p.Message}");
@@ -139,7 +139,31 @@ string safeName = DefaultPathHelper.SanitizeModelName("org/model-name");
 // → "org_model-name"
 ```
 
-### 8) Disable atomic writes (for performance)
+### 8) Resume interrupted downloads by default
+
+```csharp
+await downloader.DownloadFilesAsync(new DownloadRequest
+{
+    RepoId = "my-org/my-model",
+    LocalDirectory = "./models",
+    RequiredFiles = ["model.onnx"]
+    // ResumePartialDownloads defaults to true when atomic writes are enabled.
+});
+```
+
+Disable resume when you explicitly want a clean restart:
+
+```csharp
+await downloader.DownloadFilesAsync(new DownloadRequest
+{
+    RepoId = "my-org/my-model",
+    LocalDirectory = "./models",
+    RequiredFiles = ["model.onnx"],
+    ResumePartialDownloads = false
+});
+```
+
+### 9) Disable atomic writes (for performance)
 
 ```csharp
 await downloader.DownloadFilesAsync(new DownloadRequest

@@ -52,6 +52,11 @@ internal static class DownloadCommand
             Description = "Suppress progress bar output"
         };
 
+        var noResumeFlag = new Option<bool>("--no-resume")
+        {
+            Description = "Disable resuming preserved partial downloads"
+        };
+
         var quietFlag = new Option<bool>("--quiet", "-q")
         {
             Description = "Minimal output (only errors)"
@@ -65,6 +70,7 @@ internal static class DownloadCommand
         command.Add(tokenOption);
         command.Add(optionalFlag);
         command.Add(noProgressFlag);
+        command.Add(noResumeFlag);
         command.Add(quietFlag);
 
         command.SetAction(async (ParseResult parseResult, CancellationToken cancellationToken) =>
@@ -76,6 +82,7 @@ internal static class DownloadCommand
             var token = parseResult.GetValue(tokenOption);
             var isOptional = parseResult.GetValue(optionalFlag);
             var noProgress = parseResult.GetValue(noProgressFlag);
+            var noResume = parseResult.GetValue(noResumeFlag);
             var quiet = parseResult.GetValue(quietFlag);
 
             if (files.Length == 0)
@@ -107,15 +114,15 @@ internal static class DownloadCommand
             {
                 if (quiet)
                 {
-                    await RunSilentAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, cancellationToken);
+                    await RunSilentAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
                 }
                 else if (noProgress)
                 {
-                    await RunTextOnlyAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, cancellationToken);
+                    await RunTextOnlyAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
                 }
                 else
                 {
-                    await RunWithProgressAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, cancellationToken);
+                    await RunWithProgressAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
                 }
 
                 stopwatch.Stop();
@@ -166,7 +173,7 @@ internal static class DownloadCommand
     private static async Task RunSilentAsync(
         HuggingFaceDownloader downloader, string repoId, string localDir,
         IReadOnlyList<string> requiredFiles, IReadOnlyList<string>? optionalFiles,
-        string revision, CancellationToken ct)
+        string revision, bool noResume, CancellationToken ct)
     {
         var request = new DownloadRequest
         {
@@ -174,7 +181,8 @@ internal static class DownloadCommand
             LocalDirectory = localDir,
             RequiredFiles = requiredFiles,
             OptionalFiles = optionalFiles,
-            Revision = revision
+            Revision = revision,
+            ResumePartialDownloads = !noResume
         };
 
         await downloader.DownloadFilesAsync(request, ct);
@@ -183,7 +191,7 @@ internal static class DownloadCommand
     private static async Task RunTextOnlyAsync(
         HuggingFaceDownloader downloader, string repoId, string localDir,
         IReadOnlyList<string> requiredFiles, IReadOnlyList<string>? optionalFiles,
-        string revision, CancellationToken ct)
+        string revision, bool noResume, CancellationToken ct)
     {
         var progress = new Progress<DownloadProgress>(p =>
         {
@@ -198,7 +206,8 @@ internal static class DownloadCommand
             RequiredFiles = requiredFiles,
             OptionalFiles = optionalFiles,
             Revision = revision,
-            Progress = progress
+            Progress = progress,
+            ResumePartialDownloads = !noResume
         };
 
         await downloader.DownloadFilesAsync(request, ct);
@@ -207,7 +216,7 @@ internal static class DownloadCommand
     private static async Task RunWithProgressAsync(
         HuggingFaceDownloader downloader, string repoId, string localDir,
         IReadOnlyList<string> requiredFiles, IReadOnlyList<string>? optionalFiles,
-        string revision, CancellationToken ct)
+        string revision, bool noResume, CancellationToken ct)
     {
         await AnsiConsole.Progress()
             .AutoRefresh(true)
@@ -260,7 +269,8 @@ internal static class DownloadCommand
                     RequiredFiles = requiredFiles,
                     OptionalFiles = optionalFiles,
                     Revision = revision,
-                    Progress = progress
+                    Progress = progress,
+                    ResumePartialDownloads = !noResume
                 };
 
                 await downloader.DownloadFilesAsync(request, ct);

@@ -46,6 +46,7 @@ Describes a set of files to download from a Hugging Face repository.
 | `Revision` | `string` | `"main"` | Git branch, tag, or commit SHA |
 | `Progress` | `IProgress<DownloadProgress>?` | `null` | Progress reporter |
 | `UseAtomicWrites` | `bool` | `true` | Write to temp file first, then rename |
+| `ResumePartialDownloads` | `bool` | `true` | Reuse preserved atomic partial downloads when the remote file still matches |
 
 ---
 
@@ -63,6 +64,7 @@ Reports progress during file downloads.
 | `PercentComplete` | `double` | Overall completion (0–100) |
 | `BytesDownloaded` | `long` | Total bytes downloaded across all files |
 | `TotalBytes` | `long` | Total bytes expected (0 if unknown) |
+| `ResumedBytes` | `long` | Total bytes reused from preserved partial downloads |
 | `CurrentFile` | `string?` | File currently being downloaded |
 | `CurrentFileIndex` | `int` | 1-based index of current file |
 | `TotalFileCount` | `int` | Total number of files to download |

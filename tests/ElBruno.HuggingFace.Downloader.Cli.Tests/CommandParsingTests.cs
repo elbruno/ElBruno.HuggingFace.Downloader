@@ -77,6 +77,7 @@ public sealed class CommandParsingTests
         Assert.Contains("--token", optionNames);
         Assert.Contains("--optional", optionNames);
         Assert.Contains("--no-progress", optionNames);
+        Assert.Contains("--no-resume", optionNames);
         Assert.Contains("--quiet", optionNames);
     }
 
