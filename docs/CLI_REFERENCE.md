@@ -16,6 +16,7 @@ After installation, the `hfdownload` command is available globally.
 
 ```bash
 hfdownload download <repo-id> <files...> [options]
+hfdownload download --manifest <bundle.json> [options]
 ```
 
 **Arguments:**
@@ -30,6 +31,7 @@ hfdownload download <repo-id> <files...> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-o, --output <dir>` | Local directory for downloaded files | Platform cache dir |
+| `-m, --manifest <file>` | JSON manifest describing a bundle to ensure | — |
 | `-r, --revision <ref>` | Git revision — branch, tag, or commit SHA | `main` |
 | `-t, --token <token>` | Hugging Face auth token (overrides `HF_TOKEN` env var) | — |
 | `--optional` | Treat listed files as optional (skip failures) | `false` |
@@ -55,8 +57,39 @@ hfdownload download my-org/model config.json --optional
 # Disable resumable downloads for a clean restart
 hfdownload download my-org/model weights.bin --no-resume
 
+# Ensure a manifest-defined bundle with integrity validation
+hfdownload download --manifest ./phi4-bundle.json -o ./models/phi4
+
 # Quiet mode for scripts
 hfdownload download my-org/model weights.bin -q
+```
+
+**Manifest notes:**
+
+- `--manifest` is mutually exclusive with positional `<repo-id>` and `<files...>` arguments.
+- The manifest controls the bundle file list and default revision.
+- Existing files are validated before reuse; corrupted files are re-downloaded.
+- A resolved manifest is written to `<output>/.hf.bundle.resolved.json`.
+
+**Example manifest:**
+
+```json
+{
+  "repoId": "microsoft/Phi-4-mini-instruct-onnx",
+  "revision": "main",
+  "files": [
+    {
+      "path": "onnx/model.onnx",
+      "size": 123456789,
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "required": true
+    },
+    {
+      "path": "tokenizer.json",
+      "required": false
+    }
+  ]
+}
 ```
 
 ---

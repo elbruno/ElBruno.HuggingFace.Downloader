@@ -73,6 +73,7 @@ public sealed class CommandParsingTests
         var optionNames = GetOptionNames(cmd);
 
         Assert.Contains("--output", optionNames);
+        Assert.Contains("--manifest", optionNames);
         Assert.Contains("--revision", optionNames);
         Assert.Contains("--token", optionNames);
         Assert.Contains("--optional", optionNames);

@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Diagnostics;
+using System.Text.Json;
 using ElBruno.HuggingFace;
 using Spectre.Console;
 
@@ -15,15 +16,21 @@ internal static class DownloadCommand
     /// </summary>
     public static Command Create()
     {
-        var repoIdArg = new Argument<string>("repo-id")
+        var repoIdArg = new Argument<string?>("repo-id")
         {
-            Description = "Hugging Face repository ID (e.g., microsoft/Phi-4-mini-instruct-onnx)"
+            Description = "Hugging Face repository ID (e.g., microsoft/Phi-4-mini-instruct-onnx)",
+            Arity = ArgumentArity.ZeroOrOne
         };
 
         var filesArg = new Argument<string[]>("files")
         {
             Description = "Files to download, relative to the repo root",
             Arity = ArgumentArity.ZeroOrMore
+        };
+
+        var manifestOption = new Option<string?>("--manifest", "-m")
+        {
+            Description = "Path to a model bundle manifest JSON file"
         };
 
         var outputOption = new Option<string?>("--output", "-o")
@@ -65,6 +72,7 @@ internal static class DownloadCommand
         var command = new Command("download", "Download files from a Hugging Face repository");
         command.Add(repoIdArg);
         command.Add(filesArg);
+        command.Add(manifestOption);
         command.Add(outputOption);
         command.Add(revisionOption);
         command.Add(tokenOption);
@@ -75,8 +83,9 @@ internal static class DownloadCommand
 
         command.SetAction(async (ParseResult parseResult, CancellationToken cancellationToken) =>
         {
-            var repoId = parseResult.GetRequiredValue(repoIdArg);
+            var repoId = parseResult.GetValue(repoIdArg);
             var files = parseResult.GetValue(filesArg) ?? [];
+            var manifestPath = parseResult.GetValue(manifestOption);
             var output = parseResult.GetValue(outputOption);
             var revision = parseResult.GetValue(revisionOption) ?? "main";
             var token = parseResult.GetValue(tokenOption);
@@ -84,18 +93,6 @@ internal static class DownloadCommand
             var noProgress = parseResult.GetValue(noProgressFlag);
             var noResume = parseResult.GetValue(noResumeFlag);
             var quiet = parseResult.GetValue(quietFlag);
-
-            if (files.Length == 0)
-            {
-                AnsiConsole.MarkupLine("[red]Error:[/] At least one file must be specified.");
-                AnsiConsole.MarkupLine("[dim]Usage: hfdownload download <repo-id> file1 [[file2 ...]][/]");
-                return 1;
-            }
-
-            var localDir = output
-                ?? Path.Combine(
-                    DefaultPathHelper.GetDefaultCacheDirectory("hfdownload"),
-                    DefaultPathHelper.SanitizeModelName(repoId));
 
             var options = new HuggingFaceDownloaderOptions
             {
@@ -105,6 +102,49 @@ internal static class DownloadCommand
 
             using var downloader = new HuggingFaceDownloader(options);
 
+            ModelBundleManifest? manifest = null;
+            if (!string.IsNullOrWhiteSpace(manifestPath))
+            {
+                if (!string.IsNullOrWhiteSpace(repoId) || files.Length > 0)
+                {
+                    AnsiConsole.MarkupLine("[red]Error:[/] Use either [bold]--manifest[/] or positional repo/file arguments, not both.");
+                    return 1;
+                }
+
+                try
+                {
+                    manifest = await ModelBundleManifestJson.LoadAsync(manifestPath, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or ArgumentException)
+                {
+                    AnsiConsole.MarkupLine($"[red]Error:[/] Failed to load manifest: {Markup.Escape(ex.Message)}");
+                    return 1;
+                }
+
+                repoId = manifest.RepoId;
+                files = manifest.Files.Select(file => file.Path).ToArray();
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(repoId))
+                {
+                    AnsiConsole.MarkupLine("[red]Error:[/] A repository ID is required unless [bold]--manifest[/] is used.");
+                    return 1;
+                }
+
+                if (files.Length == 0)
+                {
+                    AnsiConsole.MarkupLine("[red]Error:[/] At least one file must be specified.");
+                    AnsiConsole.MarkupLine("[dim]Usage: hfdownload download <repo-id> file1 [[file2 ...]] or hfdownload download --manifest bundle.json[/]");
+                    return 1;
+                }
+            }
+
+            var localDir = output
+                ?? Path.Combine(
+                    DefaultPathHelper.GetDefaultCacheDirectory("hfdownload"),
+                    DefaultPathHelper.SanitizeModelName(repoId!));
+
             IReadOnlyList<string> requiredFiles = isOptional ? Array.Empty<string>() : files;
             IReadOnlyList<string>? optionalFiles = isOptional ? files : null;
 
@@ -112,17 +152,32 @@ internal static class DownloadCommand
 
             try
             {
-                if (quiet)
+                if (manifest is not null)
                 {
-                    await RunSilentAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
+                    if (quiet)
+                    {
+                        await RunBundleSilentAsync(downloader, manifest, localDir, cancellationToken);
+                    }
+                    else if (noProgress)
+                    {
+                        await RunBundleTextOnlyAsync(downloader, manifest, localDir, cancellationToken);
+                    }
+                    else
+                    {
+                        await RunBundleWithProgressAsync(downloader, manifest, localDir, cancellationToken);
+                    }
+                }
+                else if (quiet)
+                {
+                    await RunSilentAsync(downloader, repoId!, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
                 }
                 else if (noProgress)
                 {
-                    await RunTextOnlyAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
+                    await RunTextOnlyAsync(downloader, repoId!, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
                 }
                 else
                 {
-                    await RunWithProgressAsync(downloader, repoId, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
+                    await RunWithProgressAsync(downloader, repoId!, localDir, requiredFiles, optionalFiles, revision, noResume, cancellationToken);
                 }
 
                 stopwatch.Stop();
@@ -130,7 +185,7 @@ internal static class DownloadCommand
                 if (!quiet)
                 {
                     AnsiConsole.WriteLine();
-                    AnsiConsole.MarkupLine($"[green]✓[/] Download complete for [bold]{Markup.Escape(repoId)}[/]");
+                    AnsiConsole.MarkupLine($"[green]✓[/] Download complete for [bold]{Markup.Escape(repoId!)}[/]");
                     AnsiConsole.MarkupLine($"  [dim]Files:[/]  {files.Length}");
                     AnsiConsole.MarkupLine($"  [dim]Dir:[/]    {Markup.Escape(localDir)}");
                     AnsiConsole.MarkupLine($"  [dim]Time:[/]   {stopwatch.Elapsed:m\\:ss\\.ff}");
@@ -274,6 +329,84 @@ internal static class DownloadCommand
                 };
 
                 await downloader.DownloadFilesAsync(request, ct);
+            });
+    }
+
+    private static async Task RunBundleSilentAsync(
+        HuggingFaceDownloader downloader,
+        ModelBundleManifest manifest,
+        string localDir,
+        CancellationToken ct)
+    {
+        await downloader.EnsureBundleAsync(manifest, localDir, cancellationToken: ct);
+    }
+
+    private static async Task RunBundleTextOnlyAsync(
+        HuggingFaceDownloader downloader,
+        ModelBundleManifest manifest,
+        string localDir,
+        CancellationToken ct)
+    {
+        var progress = new Progress<DownloadProgress>(p =>
+        {
+            if (p.Message is not null)
+                AnsiConsole.MarkupLine($"[grey]{Markup.Escape(p.Message)}[/]");
+        });
+
+        await downloader.EnsureBundleAsync(manifest, localDir, progress, ct);
+    }
+
+    private static async Task RunBundleWithProgressAsync(
+        HuggingFaceDownloader downloader,
+        ModelBundleManifest manifest,
+        string localDir,
+        CancellationToken ct)
+    {
+        await AnsiConsole.Progress()
+            .AutoRefresh(true)
+            .AutoClear(false)
+            .HideCompleted(false)
+            .Columns(
+                new TaskDescriptionColumn(),
+                new ProgressBarColumn(),
+                new PercentageColumn(),
+                new SpinnerColumn())
+            .StartAsync(async ctx =>
+            {
+                var overallTask = ctx.AddTask($"[bold]{Markup.Escape(manifest.RepoId)}[/]", maxValue: 100);
+                var fileTask = ctx.AddTask("Preparing manifest...", maxValue: 100);
+
+                var progress = new Progress<DownloadProgress>(p =>
+                {
+                    overallTask.Value = Math.Min(p.PercentComplete, 100);
+
+                    switch (p.Stage)
+                    {
+                        case DownloadStage.Checking:
+                            fileTask.Description = Markup.Escape(p.Message ?? "Checking manifest...");
+                            break;
+
+                        case DownloadStage.Downloading when p.CurrentFile is not null:
+                            fileTask.Description = $"[dim]{Markup.Escape(p.CurrentFile)}[/]";
+                            fileTask.Value = p.TotalBytes > 0
+                                ? Math.Min(p.PercentComplete, 100)
+                                : 0;
+                            break;
+
+                        case DownloadStage.Validating:
+                            fileTask.Description = "Validating bundle...";
+                            fileTask.Value = 99;
+                            break;
+
+                        case DownloadStage.Complete:
+                            overallTask.Value = 100;
+                            fileTask.Value = 100;
+                            fileTask.Description = "[green]Done[/]";
+                            break;
+                    }
+                });
+
+                await downloader.EnsureBundleAsync(manifest, localDir, progress, ct);
             });
     }
 }

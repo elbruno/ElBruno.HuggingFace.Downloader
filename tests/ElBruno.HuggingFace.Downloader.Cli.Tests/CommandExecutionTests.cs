@@ -261,6 +261,28 @@ public sealed class CommandExecutionTests : IDisposable
         Assert.Equal(1, exitCode);
     }
 
+    [Fact]
+    public async Task Download_InvalidManifest_ReturnsOne()
+    {
+        var manifestPath = Path.Combine(_tempDir, "bundle.json");
+        await File.WriteAllTextAsync(manifestPath, "{ invalid json");
+
+        var exitCode = await InvokeAsync("download", "--manifest", manifestPath);
+
+        Assert.Equal(1, exitCode);
+    }
+
+    [Fact]
+    public async Task Download_ManifestAndPositionalArguments_ReturnsOne()
+    {
+        var manifestPath = Path.Combine(_tempDir, "bundle.json");
+        await File.WriteAllTextAsync(manifestPath, """{"repoId":"demo/repo","files":[{"path":"model.onnx"}]}""");
+
+        var exitCode = await InvokeAsync("download", "demo/repo", "model.onnx", "--manifest", manifestPath);
+
+        Assert.Equal(1, exitCode);
+    }
+
     // ── Config command E2E ───────────────────────────────────────────
 
     [Fact]

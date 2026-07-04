@@ -52,7 +52,7 @@ This is the standard workflow — the version is derived from the release tag.
    - `src/ElBruno.HuggingFace.Downloader.Cli/ElBruno.HuggingFace.Downloader.Cli.csproj`
 
    ```xml
-   <Version>1.2.0</Version>
+   <Version>1.3.0</Version>
    ```
 
 2. **NuGet icon source** (already configured):
@@ -63,11 +63,11 @@ This is the standard workflow — the version is derived from the release tag.
 3. **Commit and push** the version change to `main`
 4. **Create a GitHub Release:**
    - Go to the repo → **Releases** → **Draft a new release**
-   - Create a new tag: `v1.2.0` (must match the version in the csproj)
+   - Create a new tag: `v1.3.0` (must match the version in the csproj)
    - Fill in the release title and notes
    - Click **Publish release**
 5. The **Publish to NuGet** workflow runs automatically:
-   - Strips the `v` prefix from the tag → uses `1.2.0` as the package version
+   - Strips the `v` prefix from the tag → uses `1.3.0` as the package version
    - Builds, tests, packs, and pushes to NuGet.org
 
 ### Option B: Manual Dispatch
