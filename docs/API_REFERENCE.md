@@ -23,6 +23,7 @@ The main entry point for downloading files from Hugging Face Hub repositories.
 | Method | Returns | Description |
 |---|---|---|
 | `DownloadFilesAsync(DownloadRequest, CancellationToken)` | `Task` | Downloads files described by the request. Skips existing files. |
+| `EnsureBundleAsync(ModelBundleManifest, string, IProgress<DownloadProgress>?, CancellationToken)` | `Task<ModelBundleResult>` | Ensures a manifest-defined bundle, validates size and SHA-256, and writes a resolved manifest file. |
 | `GetMissingFiles(IEnumerable<string>, string)` | `IReadOnlyList<string>` | Returns files that don't exist in the local directory |
 | `AreFilesAvailable(IEnumerable<string>, string)` | `bool` | Returns true if all files exist locally |
 | `Dispose()` | `void` | Disposes the HttpClient if owned by this instance |
@@ -69,6 +70,91 @@ Reports progress during file downloads.
 | `CurrentFileIndex` | `int` | 1-based index of current file |
 | `TotalFileCount` | `int` | Total number of files to download |
 | `Message` | `string?` | Human-readable status message |
+
+---
+
+### `ModelBundleManifest`
+
+Describes a manifest-driven bundle of files to ensure from a single Hugging Face repository.
+
+#### Properties
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `RepoId` | `string` | *(required)* | HF repository ID |
+| `Revision` | `string` | `"main"` | Default Git revision for bundle files |
+| `Files` | `IReadOnlyList<ModelBundleFile>` | *(required)* | Files included in the bundle |
+
+### `ModelBundleFile`
+
+Describes one file entry in a bundle manifest.
+
+#### Properties
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `Path` | `string` | *(required)* | Repository-relative file path |
+| `Size` | `long?` | `null` | Optional expected file size in bytes |
+| `Sha256` | `string?` | `null` | Optional expected SHA-256 hash |
+| `Required` | `bool` | `true` | Whether the file must exist after the run |
+| `Revision` | `string?` | `null` | Optional per-file revision override |
+
+### `ModelBundleResult`
+
+Returned by `EnsureBundleAsync` after the bundle is validated and the resolved manifest is written.
+
+#### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `LocalDirectory` | `string` | Local directory used for the bundle |
+| `ResolvedManifestPath` | `string` | Path to the written `.hf.bundle.resolved.json` file |
+| `ResolvedManifest` | `ResolvedModelBundleManifest` | Resolved manifest content |
+| `DownloadedFileCount` | `int` | Files downloaded during the current run |
+| `ReusedFileCount` | `int` | Files already present and successfully reused |
+| `MissingOptionalFileCount` | `int` | Optional files that remained unavailable |
+
+### `ResolvedModelBundleManifest`
+
+Records the resolved state of a validated bundle.
+
+#### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `RepoId` | `string` | HF repository ID |
+| `Revision` | `string` | Single validated bundle revision |
+| `GeneratedAtUtc` | `DateTimeOffset` | UTC timestamp when the resolved manifest was written |
+| `Files` | `IReadOnlyList<ResolvedModelBundleFile>` | Resolved file entries |
+
+### `ResolvedModelBundleFile`
+
+Records the resolved state of one file in a bundle.
+
+#### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `Path` | `string` | Repository-relative file path |
+| `Revision` | `string` | Revision used for the file |
+| `Required` | `bool` | Whether the file is required |
+| `Exists` | `bool` | Whether the file exists locally after the run |
+| `Size` | `long?` | Resolved size in bytes |
+| `Sha256` | `string?` | Resolved SHA-256 hash |
+| `DownloadedThisRun` | `bool` | Whether the file was downloaded during the current run |
+
+### `ModelBundleManifestJson`
+
+Helper for reading and writing manifest JSON files.
+
+#### Methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `Deserialize(string)` | `ModelBundleManifest` | Deserializes a manifest from JSON text |
+| `Serialize(ModelBundleManifest)` | `string` | Serializes a manifest to JSON text |
+| `LoadAsync(string, CancellationToken)` | `Task<ModelBundleManifest>` | Loads a manifest from a JSON file |
+| `SaveAsync(ModelBundleManifest, string, CancellationToken)` | `Task` | Saves a manifest to a JSON file |
 
 ---
 

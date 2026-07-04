@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,6 +15,7 @@ public sealed class HuggingFaceDownloader : IDisposable
     private const string PartialFileSuffix = ".partial";
     private const string PartialMetadataSuffix = ".partial.json";
     private const string AtomicTempFileSuffix = ".tmp";
+    private const string ResolvedBundleManifestFileName = ".hf.bundle.resolved.json";
 
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
@@ -172,6 +174,7 @@ public sealed class HuggingFaceDownloader : IDisposable
                     totalResumedBytes,
                     totalBytes,
                     remoteInfo,
+                    bundleValidation: null,
                     cancellationToken).ConfigureAwait(false);
 
                 completedBytes += downloadResult.FileBytes;
@@ -268,6 +271,259 @@ public sealed class HuggingFaceDownloader : IDisposable
             ByteFormatHelper.FormatBytes(totalResumedBytes));
     }
 
+    /// <summary>
+    /// Ensures every file described by <paramref name="manifest"/> is present and valid in <paramref name="localDirectory"/>.
+    /// </summary>
+    public async Task<ModelBundleResult> EnsureBundleAsync(
+        ModelBundleManifest manifest,
+        string localDirectory,
+        IProgress<DownloadProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        if (string.IsNullOrWhiteSpace(localDirectory))
+            throw new ArgumentException("LocalDirectory cannot be null or empty.", nameof(localDirectory));
+        if (string.IsNullOrWhiteSpace(manifest.RepoId))
+            throw new ArgumentException("RepoId cannot be null or empty.", nameof(manifest));
+        if (manifest.Files is null || manifest.Files.Count == 0)
+            throw new ArgumentException("Bundle manifests must include at least one file.", nameof(manifest));
+
+        Directory.CreateDirectory(localDirectory);
+
+        var normalizedFiles = manifest.Files
+            .Select(file => NormalizeBundleFile(file, manifest.Revision))
+            .ToList();
+
+        var distinctRevisions = normalizedFiles
+            .Select(file => file.Revision)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (distinctRevisions.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"Manifest '{manifest.RepoId}' contains mixed revisions: {string.Join(", ", distinctRevisions)}.");
+        }
+
+        var resolvedRevision = distinctRevisions[0];
+        progress?.Report(new DownloadProgress
+        {
+            Stage = DownloadStage.Checking,
+            CurrentFileIndex = 0,
+            TotalFileCount = normalizedFiles.Count,
+            Message = $"Checking bundle manifest for {manifest.RepoId}..."
+        });
+
+        var filesToDownload = new List<NormalizedBundleFile>(normalizedFiles.Count);
+        foreach (var file in normalizedFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var localPath = GetLocalPath(localDirectory, file.Path);
+            if (!File.Exists(localPath))
+            {
+                filesToDownload.Add(file);
+                continue;
+            }
+
+            var localValidation = await ValidateLocalBundleFileAsync(localPath, file, cancellationToken).ConfigureAwait(false);
+            if (localValidation.IsValid)
+                continue;
+
+            _logger.LogInformation("Existing bundle file {File} failed integrity validation and will be refreshed", file.Path);
+            DeleteIfExists(localPath);
+            CleanupResumeArtifacts(localPath);
+            filesToDownload.Add(file);
+        }
+
+        long totalBytes = 0;
+        long completedBytes = 0;
+        var remoteFileInfos = new Dictionary<string, RemoteFileInfo?>(StringComparer.Ordinal);
+
+        foreach (var file in filesToDownload)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var url = HuggingFaceUrlBuilder.GetFileUrl(manifest.RepoId, file.Path, file.Revision);
+            var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
+            remoteFileInfos[file.Path] = remoteInfo;
+
+            if (file.Size is > 0)
+            {
+                totalBytes += file.Size.Value;
+                continue;
+            }
+
+            if (remoteInfo?.ContentLength is > 0)
+                totalBytes += remoteInfo.ContentLength.Value;
+        }
+
+        for (int i = 0; i < filesToDownload.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var file = filesToDownload[i];
+            var localPath = GetLocalPath(localDirectory, file.Path);
+            var localDir = Path.GetDirectoryName(localPath);
+            if (!string.IsNullOrEmpty(localDir))
+                Directory.CreateDirectory(localDir);
+
+            var url = HuggingFaceUrlBuilder.GetFileUrl(manifest.RepoId, file.Path, file.Revision);
+            var request = new DownloadRequest
+            {
+                RepoId = manifest.RepoId,
+                LocalDirectory = localDirectory,
+                RequiredFiles = [file.Path],
+                Revision = file.Revision,
+                Progress = progress
+            };
+
+            try
+            {
+                var downloadResult = await DownloadSingleFileAsync(
+                    url,
+                    localPath,
+                    file.Path,
+                    request,
+                    i,
+                    filesToDownload.Count,
+                    file.Size ?? 0,
+                    completedBytes,
+                    previouslyResumedBytes: 0,
+                    totalBytes,
+                    remoteFileInfos.GetValueOrDefault(file.Path),
+                    new BundleFileValidation(file.Size, file.Sha256),
+                    cancellationToken).ConfigureAwait(false);
+
+                completedBytes += downloadResult.FileBytes;
+            }
+            catch (HttpRequestException ex) when (!file.Required)
+            {
+                _logger.LogWarning("Optional bundle file {File} failed to download, skipping", file.Path);
+                _logger.LogDebug(ex, "Optional bundle file download failed");
+            }
+            catch (InvalidOperationException ex) when (!file.Required)
+            {
+                _logger.LogWarning("Optional bundle file {File} failed integrity validation, skipping", file.Path);
+                _logger.LogDebug(ex, "Optional bundle file validation failed");
+            }
+            catch (HttpRequestException ex) when (file.Required)
+            {
+                var statusCode = ex.StatusCode;
+                if (statusCode == HttpStatusCode.Unauthorized || statusCode == HttpStatusCode.Forbidden)
+                {
+                    throw new InvalidOperationException(
+                        $"Access denied downloading '{file.Path}'. The repository may be private or gated. Ensure HF_TOKEN is set with appropriate permissions.",
+                        ex);
+                }
+
+                if (statusCode == HttpStatusCode.NotFound)
+                    throw new InvalidOperationException($"File '{file.Path}' not found (404).", ex);
+
+                throw new InvalidOperationException(
+                    $"Failed to download required file '{file.Path}': {ex.Message}",
+                    ex);
+            }
+        }
+
+        progress?.Report(new DownloadProgress
+        {
+            Stage = DownloadStage.Validating,
+            PercentComplete = filesToDownload.Count == 0 ? 100 : 99,
+            BytesDownloaded = completedBytes,
+            TotalBytes = totalBytes,
+            CurrentFileIndex = normalizedFiles.Count,
+            TotalFileCount = normalizedFiles.Count,
+            Message = "Validating bundle files..."
+        });
+
+        var downloadedPaths = filesToDownload
+            .Select(file => file.Path)
+            .ToHashSet(StringComparer.Ordinal);
+        var resolvedFiles = new List<ResolvedModelBundleFile>(normalizedFiles.Count);
+        var requiredValidationErrors = new List<string>();
+
+        foreach (var file in normalizedFiles)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var localPath = GetLocalPath(localDirectory, file.Path);
+            if (!File.Exists(localPath))
+            {
+                if (file.Required)
+                    requiredValidationErrors.Add(file.Path);
+
+                resolvedFiles.Add(new ResolvedModelBundleFile
+                {
+                    Path = file.Path,
+                    Revision = file.Revision,
+                    Required = file.Required,
+                    Exists = false,
+                    DownloadedThisRun = false
+                });
+                continue;
+            }
+
+            var validation = await ValidateLocalBundleFileAsync(localPath, file, cancellationToken).ConfigureAwait(false);
+            if (!validation.IsValid)
+            {
+                DeleteIfExists(localPath);
+                CleanupResumeArtifacts(localPath);
+
+                if (file.Required)
+                    requiredValidationErrors.Add(validation.ErrorMessage ?? file.Path);
+
+                resolvedFiles.Add(new ResolvedModelBundleFile
+                {
+                    Path = file.Path,
+                    Revision = file.Revision,
+                    Required = file.Required,
+                    Exists = false,
+                    DownloadedThisRun = downloadedPaths.Contains(file.Path)
+                });
+                continue;
+            }
+
+            resolvedFiles.Add(new ResolvedModelBundleFile
+            {
+                Path = file.Path,
+                Revision = file.Revision,
+                Required = file.Required,
+                Exists = true,
+                Size = validation.Size,
+                Sha256 = validation.Sha256,
+                DownloadedThisRun = downloadedPaths.Contains(file.Path)
+            });
+        }
+
+        if (requiredValidationErrors.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Bundle validation failed. Missing or invalid required files: {string.Join(", ", requiredValidationErrors)}");
+        }
+
+        var resolvedManifest = new ResolvedModelBundleManifest
+        {
+            RepoId = manifest.RepoId,
+            Revision = resolvedRevision,
+            GeneratedAtUtc = DateTimeOffset.UtcNow,
+            Files = resolvedFiles
+        };
+
+        var resolvedManifestPath = Path.Combine(localDirectory, ResolvedBundleManifestFileName);
+        await ModelBundleManifestJson.SaveResolvedAsync(resolvedManifest, resolvedManifestPath, cancellationToken).ConfigureAwait(false);
+
+        return new ModelBundleResult
+        {
+            LocalDirectory = localDirectory,
+            ResolvedManifestPath = resolvedManifestPath,
+            ResolvedManifest = resolvedManifest,
+            DownloadedFileCount = resolvedFiles.Count(file => file.DownloadedThisRun && file.Exists),
+            ReusedFileCount = resolvedFiles.Count(file => !file.DownloadedThisRun && file.Exists),
+            MissingOptionalFileCount = resolvedFiles.Count(file => !file.Required && !file.Exists)
+        };
+    }
+
     private async Task<FileDownloadResult> DownloadSingleFileAsync(
         string url,
         string localPath,
@@ -280,6 +536,7 @@ public sealed class HuggingFaceDownloader : IDisposable
         long previouslyResumedBytes,
         long totalBytes,
         RemoteFileInfo? remoteInfo,
+        BundleFileValidation? bundleValidation,
         CancellationToken cancellationToken)
     {
         var downloadState = PrepareDownloadState(localPath, request, remoteInfo);
@@ -453,6 +710,22 @@ public sealed class HuggingFaceDownloader : IDisposable
                     $"Downloaded size mismatch for '{filePath}'. Expected {resolvedTotalBytes} bytes but found {finalFileBytes} bytes.");
             }
 
+            if (bundleValidation is not null)
+            {
+                var bundleValidationResult = await ValidateDownloadedBundleFileAsync(
+                    downloadState.WritePath,
+                    filePath,
+                    bundleValidation,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (!bundleValidationResult.IsValid)
+                {
+                    CleanupDownloadArtifacts(downloadState.WritePath, downloadState.MetadataPath, request.UseAtomicWrites, keepPartial: false);
+                    throw new InvalidOperationException(
+                        bundleValidationResult.ErrorMessage ?? $"Bundle validation failed for '{filePath}'.");
+                }
+            }
+
             FinalizeCompletedDownload(downloadState.WritePath, localPath, downloadState.MetadataPath, request.UseAtomicWrites);
             return new FileDownloadResult(finalFileBytes, downloadState.ResumedBytes);
         }
@@ -609,6 +882,117 @@ public sealed class HuggingFaceDownloader : IDisposable
         return prefix + $"resumed {ByteFormatHelper.FormatBytes(resumedBytes)}, {progress}";
     }
 
+    private static NormalizedBundleFile NormalizeBundleFile(ModelBundleFile file, string manifestRevision)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        if (string.IsNullOrWhiteSpace(file.Path))
+            throw new ArgumentException("Manifest file paths cannot be null or empty.", nameof(file));
+
+        var normalizedPath = file.Path.Replace('\\', '/');
+        var normalizedRevision = string.IsNullOrWhiteSpace(file.Revision) ? manifestRevision : file.Revision!;
+
+        if (string.IsNullOrWhiteSpace(normalizedRevision))
+            throw new ArgumentException($"Manifest file '{normalizedPath}' did not resolve to a revision.", nameof(file));
+
+        return new NormalizedBundleFile(
+            normalizedPath,
+            file.Required,
+            file.Size,
+            NormalizeSha256(file.Sha256),
+            normalizedRevision);
+    }
+
+    private static string NormalizeSha256(string? sha256)
+    {
+        if (string.IsNullOrWhiteSpace(sha256))
+            return string.Empty;
+
+        var normalized = sha256.Trim().ToLowerInvariant();
+        if (normalized.Length != 64 || normalized.Any(ch => !Uri.IsHexDigit(ch)))
+            throw new ArgumentException($"Invalid SHA-256 hash '{sha256}'.", nameof(sha256));
+
+        return normalized;
+    }
+
+    private static string GetLocalPath(string localDirectory, string relativePath)
+        => Path.Combine(localDirectory, relativePath.Replace('/', Path.DirectorySeparatorChar));
+
+    private static async Task<BundleFileValidationResult> ValidateLocalBundleFileAsync(
+        string localPath,
+        NormalizedBundleFile file,
+        CancellationToken cancellationToken)
+    {
+        var actualSize = GetFileLength(localPath);
+        if (file.Size is > 0 && actualSize != file.Size.Value)
+        {
+            return new BundleFileValidationResult(
+                false,
+                actualSize,
+                null,
+                $"{file.Path} (expected {file.Size.Value} bytes, got {actualSize} bytes)");
+        }
+
+        if (string.IsNullOrEmpty(file.Sha256))
+            return new BundleFileValidationResult(true, actualSize, null, null);
+
+        var actualSha256 = await ComputeSha256Async(localPath, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(actualSha256, file.Sha256, StringComparison.Ordinal))
+        {
+            return new BundleFileValidationResult(
+                false,
+                actualSize,
+                actualSha256,
+                $"{file.Path} (expected SHA-256 {file.Sha256}, got {actualSha256})");
+        }
+
+        return new BundleFileValidationResult(true, actualSize, actualSha256, null);
+    }
+
+    private static async Task<BundleFileValidationResult> ValidateDownloadedBundleFileAsync(
+        string path,
+        string filePath,
+        BundleFileValidation validation,
+        CancellationToken cancellationToken)
+    {
+        var actualSize = GetFileLength(path);
+        if (validation.ExpectedSize is > 0 && actualSize != validation.ExpectedSize.Value)
+        {
+            return new BundleFileValidationResult(
+                false,
+                actualSize,
+                null,
+                $"Downloaded size mismatch for '{filePath}'. Expected {validation.ExpectedSize.Value} bytes but found {actualSize} bytes.");
+        }
+
+        if (string.IsNullOrEmpty(validation.ExpectedSha256))
+            return new BundleFileValidationResult(true, actualSize, null, null);
+
+        var actualSha256 = await ComputeSha256Async(path, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(actualSha256, validation.ExpectedSha256, StringComparison.Ordinal))
+        {
+            return new BundleFileValidationResult(
+                false,
+                actualSize,
+                actualSha256,
+                $"Downloaded SHA-256 mismatch for '{filePath}'. Expected {validation.ExpectedSha256} but found {actualSha256}.");
+        }
+
+        return new BundleFileValidationResult(true, actualSize, actualSha256, null);
+    }
+
+    private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 81920,
+            useAsync: true);
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
     private static PartialDownloadMetadata? TryReadPartialMetadata(string metadataPath)
     {
         if (!File.Exists(metadataPath))
@@ -701,6 +1085,17 @@ public sealed class HuggingFaceDownloader : IDisposable
     }
 
     private sealed record RemoteFileInfo(long? ContentLength, string? EntityTag, bool SupportsRanges);
+
+    private sealed record BundleFileValidation(long? ExpectedSize, string? ExpectedSha256);
+
+    private sealed record BundleFileValidationResult(bool IsValid, long Size, string? Sha256, string? ErrorMessage);
+
+    private sealed record NormalizedBundleFile(
+        string Path,
+        bool Required,
+        long? Size,
+        string Sha256,
+        string Revision);
 
     private sealed record DownloadState(
         string WritePath,

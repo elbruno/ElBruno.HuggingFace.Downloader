@@ -17,6 +17,7 @@ A .NET library and CLI tool to download files (ONNX models, tokenizers, voice pr
 - 🔒 **Atomic writes** using temp files to avoid partial/corrupt downloads
 - 🔁 **Resumable downloads** using HTTP range requests for interrupted large files
 - ✅ **Required vs optional files** — optional files fail silently
+- 🧾 **Manifest-based bundles** with SHA-256 and size validation
 - 📏 **HEAD requests** to resolve total download size before starting
 - ⏭️ **Skip existing files** — only downloads what's missing
 - 🖥️ **Cross-platform** cache directory helpers (Windows, Linux, macOS)
@@ -53,6 +54,9 @@ hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx token
 # Restart from scratch instead of resuming a preserved partial download
 hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx --no-resume
 
+# Ensure a manifest-defined bundle with integrity validation
+hfdownload download --manifest ./phi4-bundle.json -o ./models/phi4
+
 # Check if files exist locally
 hfdownload check sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
 
@@ -86,7 +90,36 @@ await downloader.DownloadFilesAsync(new DownloadRequest
 });
 ```
 
-### 2) Check if files are already downloaded
+### 2) Ensure a manifest-based bundle with SHA-256 validation
+
+```csharp
+var manifest = new ModelBundleManifest
+{
+    RepoId = "microsoft/Phi-4-mini-instruct-onnx",
+    Revision = "main",
+    Files =
+    [
+        new ModelBundleFile
+        {
+            Path = "onnx/model.onnx",
+            Size = 123456789,
+            Sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        },
+        new ModelBundleFile
+        {
+            Path = "tokenizer.json",
+            Required = false
+        }
+    ]
+};
+
+var bundle = await downloader.EnsureBundleAsync(manifest, "./models/phi4");
+Console.WriteLine(bundle.ResolvedManifestPath);
+```
+
+Manifest-driven bundle downloads validate existing files before reuse, re-download corrupted files, and write a resolved manifest to `./models/phi4/.hf.bundle.resolved.json`.
+
+### 3) Check if files are already downloaded
 
 ```csharp
 bool ready = downloader.AreFilesAvailable(
@@ -102,7 +135,7 @@ if (!ready)
 }
 ```
 
-### 3) Track download progress
+### 4) Track download progress
 
 ```csharp
 var progress = new Progress<DownloadProgress>(p =>
@@ -122,7 +155,7 @@ await downloader.DownloadFilesAsync(new DownloadRequest
 });
 ```
 
-### 4) Authentication (Private/Gated Repos)
+### 5) Authentication (Private/Gated Repos)
 
 Set the `HF_TOKEN` environment variable, or pass it explicitly:
 
@@ -133,7 +166,7 @@ var downloader = new HuggingFaceDownloader(new HuggingFaceDownloaderOptions
 });
 ```
 
-### 5) Dependency Injection
+### 6) Dependency Injection
 
 ```csharp
 builder.Services.AddHuggingFaceDownloader(options =>
