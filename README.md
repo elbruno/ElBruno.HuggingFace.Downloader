@@ -5,7 +5,7 @@
 [![Build Status](https://github.com/elbruno/ElBruno.HuggingFace.Downloader/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/elbruno/ElBruno.HuggingFace.Downloader/actions/workflows/build-and-test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/elbruno/ElBruno.HuggingFace.Downloader?style=social)](https://github.com/elbruno/ElBruno.HuggingFace.Downloader)
-[![Twitter Follow](https://img.shields.io/twitter/follow/elbruno?style=social)](https://twitter.com/elbruno)
+[![X Follow](https://img.shields.io/twitter/follow/elbruno?style=social)](https://www.x.com/elbruno/)
 
 A .NET library and CLI tool to download files (ONNX models, tokenizers, voice presets, etc.) from [Hugging Face Hub](https://huggingface.co) repositories with progress reporting, caching, and authentication support.
 
@@ -269,4 +269,4 @@ If you like this project, consider following my work across platforms:
 - 💻 **Blog**: [ElBruno.com](https://elbruno.com) — Deep dives on embeddings, RAG, .NET, and local AI
 - 📺 **YouTube**: [youtube.com/elbruno](https://www.youtube.com/elbruno) — Demos, tutorials, and live coding
 - 🔗 **LinkedIn**: [@elbruno](https://www.linkedin.com/in/elbruno/) — Professional updates and insights
-- 𝕏 **Twitter**: [@elbruno](https://www.x.com/elbruno/) — Quick tips, releases, and tech news
+- 𝕏 **X**: [@elbruno](https://www.x.com/elbruno/) — Quick tips, releases, and tech news
