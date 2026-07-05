@@ -23,6 +23,15 @@ public sealed class CachedModel
     /// <summary>Directory name (sanitized repo ID).</summary>
     public required string Name { get; init; }
 
+    /// <summary>Original Hugging Face repository ID when metadata is available.</summary>
+    public string? RepoId { get; init; }
+
+    /// <summary>Requested branch, tag, or commit SHA when metadata is available.</summary>
+    public string? RequestedRevision { get; init; }
+
+    /// <summary>Resolved immutable commit SHA when metadata is available.</summary>
+    public string? ResolvedCommitSha { get; init; }
+
     /// <summary>Full path to the model's cache directory.</summary>
     public required string FullPath { get; init; }
 

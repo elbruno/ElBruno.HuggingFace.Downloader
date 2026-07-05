@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ElBruno.HuggingFace;
 using ElBruno.HuggingFace.Cli.Models;
 
@@ -5,10 +6,15 @@ namespace ElBruno.HuggingFace.Cli.Services;
 
 /// <summary>
 /// Scans and manages the local cache directory for downloaded Hugging Face models.
-/// Convention: each immediate subdirectory of the cache root represents one model.
+/// Convention: each immediate subdirectory of the cache root represents one cached revision.
 /// </summary>
 public sealed class CacheManager
 {
+    private static readonly JsonSerializerOptions MetadataJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     /// <summary>
     /// Returns aggregate metadata for every cached model in the cache directory.
     /// </summary>
@@ -26,15 +32,18 @@ public sealed class CacheManager
                 models.Add(info);
         }
 
-        return models;
+        return models
+            .OrderBy(model => model.RepoId ?? model.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(model => model.RequestedRevision ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     /// <summary>
     /// Returns detailed metadata for a specific cached model, including per-file information.
     /// </summary>
-    public CachedModel? GetModelDetails(string cacheDir, string repoId)
+    public CachedModel? GetModelDetails(string cacheDir, string repoId, string? revision = null)
     {
-        var modelPath = ResolveModelPath(cacheDir, repoId);
+        var modelPath = ResolveModelPath(cacheDir, repoId, revision);
         if (modelPath is null || !Directory.Exists(modelPath))
             return null;
 
@@ -42,16 +51,42 @@ public sealed class CacheManager
     }
 
     /// <summary>
+    /// Returns the cache directory path for a specific repo/revision when it exists locally.
+    /// </summary>
+    public string? FindModelPath(string cacheDir, string repoId, string? revision = null)
+    {
+        return ResolveModelPath(cacheDir, repoId, revision);
+    }
+
+    /// <summary>
+    /// Builds the default cache directory path for a resolved repo revision.
+    /// </summary>
+    public static string GetDefaultModelDirectory(string cacheDir, string repoId, string resolvedRevision)
+    {
+        return Path.Combine(cacheDir, ComposeCacheDirectoryName(repoId, resolvedRevision));
+    }
+
+    /// <summary>
+    /// Builds the directory name used for one cached repo revision.
+    /// </summary>
+    public static string ComposeCacheDirectoryName(string repoId, string resolvedRevision)
+    {
+        return $"{DefaultPathHelper.SanitizeModelName(repoId)}__{DefaultPathHelper.SanitizeModelName(resolvedRevision)}";
+    }
+
+    /// <summary>
     /// Deletes all files and subdirectories for the specified model.
     /// </summary>
-    /// <returns><c>true</c> if the model directory was found and deleted; otherwise <c>false</c>.</returns>
-    public bool DeleteModel(string cacheDir, string repoId)
+    /// <returns><c>true</c> if at least one matching model directory was deleted; otherwise <c>false</c>.</returns>
+    public bool DeleteModel(string cacheDir, string repoId, string? revision = null)
     {
-        var modelPath = ResolveModelPath(cacheDir, repoId);
-        if (modelPath is null || !Directory.Exists(modelPath))
+        var modelPaths = ResolveModelPaths(cacheDir, repoId, revision);
+        if (modelPaths.Count == 0)
             return false;
 
-        Directory.Delete(modelPath, recursive: true);
+        foreach (var modelPath in modelPaths)
+            Directory.Delete(modelPath, recursive: true);
+
         return true;
     }
 
@@ -59,9 +94,9 @@ public sealed class CacheManager
     /// Deletes a single file from a cached model directory.
     /// </summary>
     /// <returns><c>true</c> if the file was found and deleted; otherwise <c>false</c>.</returns>
-    public bool DeleteFile(string cacheDir, string repoId, string filePath)
+    public bool DeleteFile(string cacheDir, string repoId, string filePath, string? revision = null)
     {
-        var modelPath = ResolveModelPath(cacheDir, repoId);
+        var modelPath = ResolveModelPath(cacheDir, repoId, revision);
         if (modelPath is null || !Directory.Exists(modelPath))
             return false;
 
@@ -102,40 +137,73 @@ public sealed class CacheManager
         return dirs.Length;
     }
 
-    /// <summary>
-    /// Resolves a repo ID to a directory path inside the cache, checking both the sanitized
-    /// name and a direct match.
-    /// </summary>
-    private static string? ResolveModelPath(string cacheDir, string repoId)
+    private static string? ResolveModelPath(string cacheDir, string repoId, string? revision)
+    {
+        return ResolveModelPaths(cacheDir, repoId, revision)
+            .FirstOrDefault();
+    }
+
+    private static IReadOnlyList<string> ResolveModelPaths(string cacheDir, string repoId, string? revision)
     {
         if (!Directory.Exists(cacheDir))
-            return null;
+            return [];
 
-        // Try sanitized name first (e.g. "microsoft/phi-2" → "microsoft_phi-2")
-        var sanitized = DefaultPathHelper.SanitizeModelName(repoId);
-        var sanitizedPath = Path.Combine(cacheDir, sanitized);
-        if (Directory.Exists(sanitizedPath))
-            return sanitizedPath;
+        var normalizedRequestedRevision = NormalizeRevision(revision);
+        var normalizedRequestedCommitSha = NormalizeCommitSha(revision);
+        var sanitizedRepoId = DefaultPathHelper.SanitizeModelName(repoId);
 
-        // Fall back to direct name match (in case the dir was named without sanitization)
-        var directPath = Path.Combine(cacheDir, repoId);
-        if (Directory.Exists(directPath))
-            return directPath;
+        return Directory.EnumerateDirectories(cacheDir)
+            .Select(path => new CacheEntry(path, ReadResolutionMetadata(path)))
+            .Where(entry => MatchesRepo(entry, repoId, sanitizedRepoId))
+            .Where(entry => MatchesRevision(entry, normalizedRequestedRevision, normalizedRequestedCommitSha))
+            .OrderByDescending(entry => new DirectoryInfo(entry.Path).LastWriteTimeUtc)
+            .Select(entry => entry.Path)
+            .ToList();
+    }
 
-        return null;
+    private static bool MatchesRepo(CacheEntry entry, string repoId, string sanitizedRepoId)
+    {
+        if (string.Equals(entry.Metadata?.RepoId, repoId, StringComparison.Ordinal))
+            return true;
+
+        var directoryName = Path.GetFileName(entry.Path);
+        return string.Equals(directoryName, repoId, StringComparison.Ordinal)
+            || string.Equals(directoryName, sanitizedRepoId, StringComparison.Ordinal)
+            || directoryName.StartsWith($"{sanitizedRepoId}__", StringComparison.Ordinal);
+    }
+
+    private static bool MatchesRevision(
+        CacheEntry entry,
+        string? normalizedRequestedRevision,
+        string? normalizedRequestedCommitSha)
+    {
+        if (normalizedRequestedRevision is null && normalizedRequestedCommitSha is null)
+            return true;
+
+        if (entry.Metadata is null)
+            return false;
+
+        return string.Equals(entry.Metadata.RequestedRevision, normalizedRequestedRevision, StringComparison.Ordinal)
+            || (!string.IsNullOrEmpty(normalizedRequestedCommitSha)
+                && string.Equals(entry.Metadata.ResolvedCommitSha, normalizedRequestedCommitSha, StringComparison.Ordinal));
     }
 
     private static CachedModel? BuildCachedModel(string modelDir, bool includeFiles)
     {
         var dirInfo = new DirectoryInfo(modelDir);
-        var allFiles = dirInfo.GetFiles("*", SearchOption.AllDirectories);
+        var metadata = ReadResolutionMetadata(modelDir);
+        var allFiles = dirInfo.GetFiles("*", SearchOption.AllDirectories)
+            .Where(file => !IsMetadataFile(Path.GetFileName(file.FullName)))
+            .ToArray();
 
         if (allFiles.Length == 0 && !includeFiles)
         {
-            // Still report empty directories
             return new CachedModel
             {
                 Name = dirInfo.Name,
+                RepoId = metadata?.RepoId,
+                RequestedRevision = metadata?.RequestedRevision,
+                ResolvedCommitSha = metadata?.ResolvedCommitSha,
                 FullPath = dirInfo.FullName,
                 TotalSize = 0,
                 FileCount = 0,
@@ -168,6 +236,9 @@ public sealed class CacheManager
         return new CachedModel
         {
             Name = dirInfo.Name,
+            RepoId = metadata?.RepoId,
+            RequestedRevision = metadata?.RequestedRevision,
+            ResolvedCommitSha = metadata?.ResolvedCommitSha,
             FullPath = dirInfo.FullName,
             TotalSize = totalSize,
             FileCount = allFiles.Length,
@@ -175,4 +246,81 @@ public sealed class CacheManager
             Files = includeFiles ? fileInfos : [],
         };
     }
+
+    private static CacheResolutionMetadata? ReadResolutionMetadata(string modelDir)
+    {
+        var downloadMetadataPath = Path.Combine(modelDir, HuggingFaceMetadataFileNames.DownloadResolutionMetadata);
+        if (File.Exists(downloadMetadataPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(downloadMetadataPath);
+                var metadata = JsonSerializer.Deserialize<DownloadResolutionMetadata>(json, MetadataJsonOptions);
+                if (metadata is not null)
+                {
+                    return new CacheResolutionMetadata(
+                        metadata.RepoId,
+                        NormalizeRevision(metadata.RequestedRevision),
+                        NormalizeCommitSha(metadata.ResolvedCommitSha));
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        var bundleMetadataPath = Path.Combine(modelDir, HuggingFaceMetadataFileNames.ResolvedBundleManifest);
+        if (!File.Exists(bundleMetadataPath))
+            return null;
+
+        try
+        {
+            var json = File.ReadAllText(bundleMetadataPath);
+            var manifest = JsonSerializer.Deserialize<ResolvedModelBundleManifest>(json, MetadataJsonOptions);
+            return manifest is null
+                ? null
+                : new CacheResolutionMetadata(
+                    manifest.RepoId,
+                    NormalizeRevision(manifest.Revision),
+                    NormalizeCommitSha(manifest.ResolvedCommitSha));
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? NormalizeRevision(string? revision)
+    {
+        return string.IsNullOrWhiteSpace(revision) ? null : revision.Trim();
+    }
+
+    private static string? NormalizeCommitSha(string? revision)
+    {
+        if (string.IsNullOrWhiteSpace(revision))
+            return null;
+
+        var normalized = revision.Trim().ToLowerInvariant();
+        if (normalized.Length != 40 || normalized.Any(ch => !Uri.IsHexDigit(ch)))
+            return null;
+
+        return normalized;
+    }
+
+    private static bool IsMetadataFile(string fileName)
+    {
+        return string.Equals(fileName, HuggingFaceMetadataFileNames.DownloadResolutionMetadata, StringComparison.Ordinal)
+            || string.Equals(fileName, HuggingFaceMetadataFileNames.ResolvedBundleManifest, StringComparison.Ordinal);
+    }
+
+    private sealed record CacheEntry(string Path, CacheResolutionMetadata? Metadata);
+
+    private sealed record CacheResolutionMetadata(string RepoId, string? RequestedRevision, string? ResolvedCommitSha);
 }

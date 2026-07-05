@@ -62,7 +62,10 @@ public static class ListCommand
             else
             {
                 var table = new Table();
-                table.AddColumn("Model");
+                table.AddColumn("Repo");
+                table.AddColumn("Revision");
+                table.AddColumn("Commit");
+                table.AddColumn("Cache");
                 table.AddColumn(new TableColumn("Files").RightAligned());
                 table.AddColumn(new TableColumn("Size").RightAligned());
                 table.AddColumn("Last Modified");
@@ -70,6 +73,9 @@ public static class ListCommand
                 foreach (var model in models)
                 {
                     table.AddRow(
+                        Markup.Escape(model.RepoId ?? model.Name),
+                        Markup.Escape(model.RequestedRevision ?? "-"),
+                        Markup.Escape(model.ResolvedCommitSha ?? "-"),
                         Markup.Escape(model.Name),
                         model.FileCount.ToString(),
                         ByteFormatHelper.FormatBytes(model.TotalSize),

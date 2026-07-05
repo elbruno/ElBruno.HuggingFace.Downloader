@@ -88,6 +88,7 @@ public sealed class ModelBundleTests : IDisposable
     {
         const string filePath = "onnx/model.onnx";
         const string content = "fresh model bytes";
+        const string resolvedCommitSha = "1234567890abcdef1234567890abcdef12345678";
         var contentBytes = Encoding.UTF8.GetBytes(content);
         var expectedSha = ComputeSha256(contentBytes);
         var localPath = Path.Combine(_tempDir, "onnx", "model.onnx");
@@ -97,9 +98,9 @@ public sealed class ModelBundleTests : IDisposable
         var handler = new MockHttpMessageHandler((request, _) =>
         {
             if (request.Method == HttpMethod.Head)
-                return Task.FromResult(CreateHeadResponse(contentBytes.Length, "\"etag\""));
+                return Task.FromResult(CreateHeadResponse(contentBytes.Length, "\"etag\"", resolvedCommitSha));
 
-            return Task.FromResult(CreateFileResponse(contentBytes, "\"etag\""));
+            return Task.FromResult(CreateFileResponse(contentBytes, "\"etag\"", resolvedCommitSha));
         });
 
         using var httpClient = new HttpClient(handler);
@@ -127,6 +128,7 @@ public sealed class ModelBundleTests : IDisposable
         Assert.True(File.Exists(result.ResolvedManifestPath));
         Assert.Single(result.ResolvedManifest.Files);
         Assert.True(result.ResolvedManifest.Files[0].Exists);
+        Assert.Equal(resolvedCommitSha, result.ResolvedManifest.ResolvedCommitSha);
         Assert.Equal(expectedSha, result.ResolvedManifest.Files[0].Sha256);
     }
 
@@ -197,7 +199,7 @@ public sealed class ModelBundleTests : IDisposable
     private static string ComputeSha256(byte[] content)
         => Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
 
-    private static HttpResponseMessage CreateHeadResponse(int contentLength, string entityTag)
+    private static HttpResponseMessage CreateHeadResponse(int contentLength, string entityTag, string? resolvedCommitSha = null)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -206,16 +208,20 @@ public sealed class ModelBundleTests : IDisposable
         response.Content.Headers.ContentLength = contentLength;
         response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue(entityTag);
         response.Headers.AcceptRanges.Add("bytes");
+        if (resolvedCommitSha is not null)
+            response.Headers.TryAddWithoutValidation("X-Resolved-Revision", resolvedCommitSha);
         return response;
     }
 
-    private static HttpResponseMessage CreateFileResponse(byte[] content, string entityTag)
+    private static HttpResponseMessage CreateFileResponse(byte[] content, string entityTag, string? resolvedCommitSha = null)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new ByteArrayContent(content)
         };
         response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue(entityTag);
+        if (resolvedCommitSha is not null)
+            response.Headers.TryAddWithoutValidation("X-Resolved-Revision", resolvedCommitSha);
         return response;
     }
 

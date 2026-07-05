@@ -32,6 +32,17 @@ public sealed class DownloadRequest
     public string Revision { get; init; } = "main";
 
     /// <summary>
+    /// Optional immutable commit SHA that the resolved revision must match.
+    /// </summary>
+    public string? ExpectedCommitSha { get; init; }
+
+    /// <summary>
+    /// Immutable commit SHA resolved from <see cref="Revision"/> when the hub exposes it.
+    /// Populated by the downloader after the operation starts.
+    /// </summary>
+    public string? ResolvedCommitSha { get; internal set; }
+
+    /// <summary>
     /// Optional progress reporter for download status updates.
     /// </summary>
     public IProgress<DownloadProgress>? Progress { get; init; }

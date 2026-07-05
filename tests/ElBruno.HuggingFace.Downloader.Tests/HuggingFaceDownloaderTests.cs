@@ -452,6 +452,125 @@ public class HuggingFaceDownloaderTests : IDisposable
         Assert.Equal("v2.0", request.Revision);
     }
 
+    [Fact]
+    public async Task ResolveCommitShaAsync_CommitRevision_ReturnsNormalizedCommit()
+    {
+        const string commitSha = "ABCDEF1234567890ABCDEF1234567890ABCDEF12";
+        using var downloader = new HuggingFaceDownloader();
+
+        var resolvedCommitSha = await downloader.ResolveCommitShaAsync("test/repo", "model.onnx", commitSha);
+
+        Assert.Equal(commitSha.ToLowerInvariant(), resolvedCommitSha);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_ResolvedCommitSha_WritesMetadata()
+    {
+        const string commitSha = "1234567890abcdef1234567890abcdef12345678";
+        const string fileContent = "resolved bytes";
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(CreateHeadResponse(fileContent.Length, resolvedCommitSha: commitSha));
+
+            return Task.FromResult(CreateFileResponse(fileContent, resolvedCommitSha: commitSha));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient, new HuggingFaceDownloaderOptions());
+        var request = new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.onnx"],
+            Revision = "main"
+        };
+
+        await downloader.DownloadFilesAsync(request);
+
+        Assert.Equal(commitSha, request.ResolvedCommitSha);
+
+        var metadataPath = Path.Combine(_tempDir, HuggingFaceMetadataFileNames.DownloadResolutionMetadata);
+        Assert.True(File.Exists(metadataPath));
+
+        var metadata = JsonSerializer.Deserialize<DownloadResolutionMetadata>(
+            await File.ReadAllTextAsync(metadataPath),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.NotNull(metadata);
+        Assert.Equal("test/repo", metadata!.RepoId);
+        Assert.Equal("main", metadata.RequestedRevision);
+        Assert.Equal(commitSha, metadata.ResolvedCommitSha);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_ExpectedCommitShaMismatch_Throws()
+    {
+        const string resolvedCommitSha = "1234567890abcdef1234567890abcdef12345678";
+        const string expectedCommitSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(CreateHeadResponse(10, resolvedCommitSha: resolvedCommitSha));
+
+            return Task.FromResult(CreateFileResponse("content", resolvedCommitSha: resolvedCommitSha));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient, new HuggingFaceDownloaderOptions());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["model.onnx"],
+                Revision = "main",
+                ExpectedCommitSha = expectedCommitSha
+            }));
+
+        Assert.Contains(expectedCommitSha, ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_LocalDirectoryPinnedToDifferentCommit_Throws()
+    {
+        const string existingCommitSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string resolvedCommitSha = "1234567890abcdef1234567890abcdef12345678";
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "model.onnx"), "existing");
+        await File.WriteAllTextAsync(
+            Path.Combine(_tempDir, HuggingFaceMetadataFileNames.DownloadResolutionMetadata),
+            JsonSerializer.Serialize(new DownloadResolutionMetadata
+            {
+                RepoId = "test/repo",
+                RequestedRevision = "main",
+                ResolvedCommitSha = existingCommitSha,
+                GeneratedAtUtc = DateTimeOffset.UtcNow
+            }));
+
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            if (request.Method == HttpMethod.Head)
+                return Task.FromResult(CreateHeadResponse(10, resolvedCommitSha: resolvedCommitSha));
+
+            return Task.FromResult(CreateFileResponse("content", resolvedCommitSha: resolvedCommitSha));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient, new HuggingFaceDownloaderOptions());
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            downloader.DownloadFilesAsync(new DownloadRequest
+            {
+                RepoId = "test/repo",
+                LocalDirectory = _tempDir,
+                RequiredFiles = ["model.onnx"],
+                Revision = "main"
+            }));
+
+        Assert.Contains(existingCommitSha, ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(resolvedCommitSha, ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     #endregion
 
     #region Mock Helpers
@@ -500,10 +619,23 @@ public class HuggingFaceDownloaderTests : IDisposable
         }
     }
 
-    private static HttpResponseMessage CreateFileResponse(string content) =>
-        new(HttpStatusCode.OK) { Content = new StringContent(content) };
+    private static HttpResponseMessage CreateFileResponse(string content, string? resolvedCommitSha = null)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(content)
+        };
+        if (resolvedCommitSha is not null)
+            response.Headers.TryAddWithoutValidation("X-Resolved-Revision", resolvedCommitSha);
 
-    private static HttpResponseMessage CreateHeadResponse(long contentLength, string? entityTag = null, bool supportsRanges = false)
+        return response;
+    }
+
+    private static HttpResponseMessage CreateHeadResponse(
+        long contentLength,
+        string? entityTag = null,
+        bool supportsRanges = false,
+        string? resolvedCommitSha = null)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -514,6 +646,8 @@ public class HuggingFaceDownloaderTests : IDisposable
             response.Headers.ETag = EntityTagHeaderValue.Parse(entityTag);
         if (supportsRanges)
             response.Headers.AcceptRanges.Add("bytes");
+        if (resolvedCommitSha is not null)
+            response.Headers.TryAddWithoutValidation("X-Resolved-Revision", resolvedCommitSha);
         return response;
     }
 

@@ -34,6 +34,11 @@ public static class InfoCommand
             DefaultValueFactory = _ => DefaultPathHelper.GetDefaultCacheDirectory("hfdownload")
         };
 
+        var revisionOption = new Option<string?>("--revision", "-r")
+        {
+            Description = "Requested revision or resolved commit SHA to inspect when multiple cached revisions exist"
+        };
+
         var formatOption = new Option<string>("--format")
         {
             Description = "Output format (table or json)",
@@ -44,16 +49,18 @@ public static class InfoCommand
         var command = new Command("info", "Show details of a cached model");
         command.Add(repoIdArgument);
         command.Add(cacheDirOption);
+        command.Add(revisionOption);
         command.Add(formatOption);
 
         command.SetAction((parseResult, _) =>
         {
             var repoId = parseResult.GetValue(repoIdArgument)!;
             var cacheDir = parseResult.GetValue(cacheDirOption)!;
+            var revision = parseResult.GetValue(revisionOption);
             var format = parseResult.GetValue(formatOption)!;
 
             var manager = new CacheManager();
-            var model = manager.GetModelDetails(cacheDir, repoId);
+            var model = manager.GetModelDetails(cacheDir, repoId, revision);
 
             if (model is null)
             {
@@ -68,7 +75,12 @@ public static class InfoCommand
             }
             else
             {
-                AnsiConsole.MarkupLine($"[bold]Model:[/]  {Markup.Escape(model.Name)}");
+                AnsiConsole.MarkupLine($"[bold]Repo:[/]   {Markup.Escape(model.RepoId ?? repoId)}");
+                if (!string.IsNullOrWhiteSpace(model.RequestedRevision))
+                    AnsiConsole.MarkupLine($"[bold]Ref:[/]    {Markup.Escape(model.RequestedRevision)}");
+                if (!string.IsNullOrWhiteSpace(model.ResolvedCommitSha))
+                    AnsiConsole.MarkupLine($"[bold]Commit:[/] {Markup.Escape(model.ResolvedCommitSha)}");
+                AnsiConsole.MarkupLine($"[bold]Cache:[/]  {Markup.Escape(model.Name)}");
                 AnsiConsole.MarkupLine($"[bold]Path:[/]   {Markup.Escape(model.FullPath)}");
                 AnsiConsole.MarkupLine($"[bold]Size:[/]   {ByteFormatHelper.FormatBytes(model.TotalSize)}");
                 AnsiConsole.MarkupLine($"[bold]Files:[/]  {model.FileCount}");

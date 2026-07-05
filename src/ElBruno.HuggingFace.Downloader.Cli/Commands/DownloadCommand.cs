@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Text.Json;
 using ElBruno.HuggingFace;
+using ElBruno.HuggingFace.Cli.Services;
 using Spectre.Console;
 
 namespace ElBruno.HuggingFace.Cli.Commands;
@@ -141,9 +142,13 @@ internal static class DownloadCommand
             }
 
             var localDir = output
-                ?? Path.Combine(
-                    DefaultPathHelper.GetDefaultCacheDirectory("hfdownload"),
-                    DefaultPathHelper.SanitizeModelName(repoId!));
+                ?? await ResolveDefaultOutputDirectoryAsync(
+                    downloader,
+                    manifest,
+                    repoId!,
+                    files,
+                    revision,
+                    cancellationToken).ConfigureAwait(false);
 
             IReadOnlyList<string> requiredFiles = isOptional ? Array.Empty<string>() : files;
             IReadOnlyList<string>? optionalFiles = isOptional ? files : null;
@@ -408,5 +413,40 @@ internal static class DownloadCommand
 
                 await downloader.EnsureBundleAsync(manifest, localDir, progress, ct);
             });
+    }
+
+    private static async Task<string> ResolveDefaultOutputDirectoryAsync(
+        HuggingFaceDownloader downloader,
+        ModelBundleManifest? manifest,
+        string repoId,
+        IReadOnlyList<string> files,
+        string revision,
+        CancellationToken cancellationToken)
+    {
+        var cacheRoot = DefaultPathHelper.GetDefaultCacheDirectory("hfdownload");
+        var (filePath, requestedRevision) = ResolveCacheKeyInput(manifest, files, revision);
+        var resolvedCommitSha = await downloader.ResolveCommitShaAsync(
+            repoId,
+            filePath,
+            requestedRevision,
+            cancellationToken).ConfigureAwait(false);
+
+        return CacheManager.GetDefaultModelDirectory(
+            cacheRoot,
+            repoId,
+            resolvedCommitSha ?? requestedRevision);
+    }
+
+    private static (string filePath, string requestedRevision) ResolveCacheKeyInput(
+        ModelBundleManifest? manifest,
+        IReadOnlyList<string> files,
+        string revision)
+    {
+        if (manifest is null)
+            return (files[0], revision);
+
+        var bundleFile = manifest.Files.FirstOrDefault(file => file.Required)
+            ?? manifest.Files.First();
+        return (bundleFile.Path, bundleFile.Revision ?? manifest.Revision);
     }
 }

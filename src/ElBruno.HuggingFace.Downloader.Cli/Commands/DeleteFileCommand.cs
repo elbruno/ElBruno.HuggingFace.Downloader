@@ -31,6 +31,11 @@ public static class DeleteFileCommand
             DefaultValueFactory = _ => DefaultPathHelper.GetDefaultCacheDirectory("hfdownload")
         };
 
+        var revisionOption = new Option<string?>("--revision", "-r")
+        {
+            Description = "Requested revision or resolved commit SHA to target when multiple cached revisions exist"
+        };
+
         var forceOption = new Option<bool>("--force", "-f")
         {
             Description = "Skip confirmation prompt"
@@ -40,6 +45,7 @@ public static class DeleteFileCommand
         command.Add(repoIdArgument);
         command.Add(fileArgument);
         command.Add(cacheDirOption);
+        command.Add(revisionOption);
         command.Add(forceOption);
 
         command.SetAction((parseResult, _) =>
@@ -47,10 +53,11 @@ public static class DeleteFileCommand
             var repoId = parseResult.GetValue(repoIdArgument)!;
             var filePath = parseResult.GetValue(fileArgument)!;
             var cacheDir = parseResult.GetValue(cacheDirOption)!;
+            var revision = parseResult.GetValue(revisionOption);
             var force = parseResult.GetValue(forceOption);
 
             var manager = new CacheManager();
-            var model = manager.GetModelDetails(cacheDir, repoId);
+            var model = manager.GetModelDetails(cacheDir, repoId, revision);
 
             if (model is null)
             {
@@ -68,7 +75,12 @@ public static class DeleteFileCommand
                 return Task.FromResult(1);
             }
 
-            AnsiConsole.MarkupLine($"Model:  [bold]{Markup.Escape(model.Name)}[/]");
+            AnsiConsole.MarkupLine($"Repo:   [bold]{Markup.Escape(model.RepoId ?? repoId)}[/]");
+            if (!string.IsNullOrWhiteSpace(model.RequestedRevision))
+                AnsiConsole.MarkupLine($"Ref:    {Markup.Escape(model.RequestedRevision)}");
+            if (!string.IsNullOrWhiteSpace(model.ResolvedCommitSha))
+                AnsiConsole.MarkupLine($"Commit: {Markup.Escape(model.ResolvedCommitSha)}");
+            AnsiConsole.MarkupLine($"Cache:  {Markup.Escape(model.Name)}");
             AnsiConsole.MarkupLine($"File:   {Markup.Escape(matchingFile.RelativePath)}");
             AnsiConsole.MarkupLine($"Size:   {ByteFormatHelper.FormatBytes(matchingFile.Size)}");
 
@@ -81,7 +93,7 @@ public static class DeleteFileCommand
                 }
             }
 
-            var deleted = manager.DeleteFile(cacheDir, repoId, filePath);
+            var deleted = manager.DeleteFile(cacheDir, repoId, filePath, revision);
             if (deleted)
             {
                 AnsiConsole.MarkupLine(

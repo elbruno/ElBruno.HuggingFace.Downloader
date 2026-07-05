@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -15,7 +16,15 @@ public sealed class HuggingFaceDownloader : IDisposable
     private const string PartialFileSuffix = ".partial";
     private const string PartialMetadataSuffix = ".partial.json";
     private const string AtomicTempFileSuffix = ".tmp";
-    private const string ResolvedBundleManifestFileName = ".hf.bundle.resolved.json";
+    private const string ResolvedCommitHeaderName = "X-Resolved-Revision";
+
+    private static readonly JsonSerializerOptions MetadataJsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
@@ -73,6 +82,23 @@ public sealed class HuggingFaceDownloader : IDisposable
     }
 
     /// <summary>
+    /// Resolves a branch or tag to an immutable commit SHA when the Hugging Face Hub exposes it.
+    /// </summary>
+    public async Task<string?> ResolveCommitShaAsync(
+        string repoId,
+        string filePath,
+        string revision = "main",
+        CancellationToken cancellationToken = default)
+    {
+        if (TryNormalizeCommitSha(revision, out var normalizedCommitSha))
+            return normalizedCommitSha;
+
+        var url = HuggingFaceUrlBuilder.GetFileUrl(repoId, filePath, revision);
+        var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
+        return NormalizeResolvedCommitSha(remoteInfo?.ResolvedCommitSha);
+    }
+
+    /// <summary>
     /// Downloads files described by the <see cref="DownloadRequest"/>. Files that already exist locally are skipped.
     /// </summary>
     public async Task DownloadFilesAsync(DownloadRequest request, CancellationToken cancellationToken = default)
@@ -85,6 +111,8 @@ public sealed class HuggingFaceDownloader : IDisposable
             throw new ArgumentException("LocalDirectory cannot be null or empty.", nameof(request));
 
         Directory.CreateDirectory(request.LocalDirectory);
+        request.ResolvedCommitSha = NormalizeResolvedCommitSha(request.ResolvedCommitSha);
+        UpdateResolvedCommitSha(request, request.Revision);
 
         var allFiles = new List<(string path, bool required)>(request.RequiredFiles.Count + (request.OptionalFiles?.Count ?? 0));
         foreach (var f in request.RequiredFiles)
@@ -97,8 +125,29 @@ public sealed class HuggingFaceDownloader : IDisposable
             .Where(f => !File.Exists(Path.Combine(request.LocalDirectory, f.path.Replace('/', Path.DirectorySeparatorChar))))
             .ToList();
 
+        if (request.ResolvedCommitSha is null
+            && allFiles.Count > 0
+            && (missingFiles.Count == 0
+                || !string.IsNullOrWhiteSpace(request.ExpectedCommitSha)
+                || HasResolutionMetadata(request.LocalDirectory)))
+        {
+            var resolvedCommitSha = await ResolveCommitShaAsync(
+                request.RepoId,
+                allFiles[0].path,
+                request.Revision,
+                cancellationToken).ConfigureAwait(false);
+            UpdateResolvedCommitSha(request, resolvedCommitSha);
+        }
+
+        EnsureLocalDirectoryRevisionCompatibility(
+            request.LocalDirectory,
+            request.RepoId,
+            request.Revision,
+            request.ResolvedCommitSha);
+
         if (missingFiles.Count == 0)
         {
+            await WriteDownloadResolutionMetadataAsync(request, cancellationToken).ConfigureAwait(false);
             request.Progress?.Report(new DownloadProgress
             {
                 Stage = DownloadStage.Complete,
@@ -138,6 +187,7 @@ public sealed class HuggingFaceDownloader : IDisposable
 
             var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, path, request.Revision);
             var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
+            UpdateResolvedCommitSha(request, remoteInfo?.ResolvedCommitSha);
             remoteFileInfos[path] = remoteInfo;
 
             if (remoteInfo?.ContentLength is > 0)
@@ -263,6 +313,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             Message = completionMessage
         });
 
+        await WriteDownloadResolutionMetadataAsync(request, cancellationToken).ConfigureAwait(false);
         _logger.LogInformation(
             "Download complete for {RepoId} — {FileCount} files, {Bytes}, resumed {ResumedBytes}",
             request.RepoId,
@@ -306,6 +357,18 @@ public sealed class HuggingFaceDownloader : IDisposable
         }
 
         var resolvedRevision = distinctRevisions[0];
+        var resolvedCommitSha = await ResolveCommitShaAsync(
+            manifest.RepoId,
+            normalizedFiles[0].Path,
+            resolvedRevision,
+            cancellationToken).ConfigureAwait(false);
+
+        EnsureLocalDirectoryRevisionCompatibility(
+            localDirectory,
+            manifest.RepoId,
+            resolvedRevision,
+            resolvedCommitSha);
+
         progress?.Report(new DownloadProgress
         {
             Stage = DownloadStage.Checking,
@@ -346,6 +409,11 @@ public sealed class HuggingFaceDownloader : IDisposable
 
             var url = HuggingFaceUrlBuilder.GetFileUrl(manifest.RepoId, file.Path, file.Revision);
             var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
+            resolvedCommitSha = MergeResolvedCommitSha(
+                resolvedCommitSha,
+                NormalizeResolvedCommitSha(remoteInfo?.ResolvedCommitSha),
+                manifest.RepoId,
+                resolvedRevision);
             remoteFileInfos[file.Path] = remoteInfo;
 
             if (file.Size is > 0)
@@ -375,6 +443,7 @@ public sealed class HuggingFaceDownloader : IDisposable
                 LocalDirectory = localDirectory,
                 RequiredFiles = [file.Path],
                 Revision = file.Revision,
+                ResolvedCommitSha = resolvedCommitSha,
                 Progress = progress
             };
 
@@ -506,11 +575,12 @@ public sealed class HuggingFaceDownloader : IDisposable
         {
             RepoId = manifest.RepoId,
             Revision = resolvedRevision,
+            ResolvedCommitSha = resolvedCommitSha,
             GeneratedAtUtc = DateTimeOffset.UtcNow,
             Files = resolvedFiles
         };
 
-        var resolvedManifestPath = Path.Combine(localDirectory, ResolvedBundleManifestFileName);
+        var resolvedManifestPath = Path.Combine(localDirectory, HuggingFaceMetadataFileNames.ResolvedBundleManifest);
         await ModelBundleManifestJson.SaveResolvedAsync(resolvedManifest, resolvedManifestPath, cancellationToken).ConfigureAwait(false);
 
         return new ModelBundleResult
@@ -620,6 +690,8 @@ public sealed class HuggingFaceDownloader : IDisposable
                     statusCode: response.StatusCode);
             }
 
+            UpdateResolvedCommitSha(request, TryGetResolvedCommitSha(response.Headers));
+
             if (downloadState.ResumedBytes > 0)
             {
                 var responseEntityTag = response.Headers.ETag?.ToString();
@@ -647,6 +719,7 @@ public sealed class HuggingFaceDownloader : IDisposable
                 PersistPartialMetadata(downloadState.MetadataPath!, new PartialDownloadMetadata
                 {
                     Revision = request.Revision,
+                    ResolvedCommitSha = request.ResolvedCommitSha,
                     EntityTag = resolvedEntityTag,
                     TotalBytes = resolvedTotalBytes > 0 ? resolvedTotalBytes : null
                 });
@@ -747,7 +820,8 @@ public sealed class HuggingFaceDownloader : IDisposable
             return new RemoteFileInfo(
                 headResponse.Content.Headers.ContentLength,
                 headResponse.Headers.ETag?.ToString(),
-                headResponse.Headers.AcceptRanges.Any(value => string.Equals(value, "bytes", StringComparison.OrdinalIgnoreCase)));
+                headResponse.Headers.AcceptRanges.Any(value => string.Equals(value, "bytes", StringComparison.OrdinalIgnoreCase)),
+                TryGetResolvedCommitSha(headResponse.Headers));
         }
         catch (HttpRequestException)
         {
@@ -788,6 +862,14 @@ public sealed class HuggingFaceDownloader : IDisposable
 
         var partialLength = GetFileLength(partialPath);
         if (metadata.Revision != request.Revision)
+        {
+            CleanupResumeArtifacts(localPath);
+            return new DownloadState(partialPath, metadataPath, true, 0, remoteInfo?.EntityTag, remoteInfo?.ContentLength, false);
+        }
+
+        if (!string.IsNullOrEmpty(metadata.ResolvedCommitSha)
+            && !string.IsNullOrEmpty(request.ResolvedCommitSha)
+            && !string.Equals(metadata.ResolvedCommitSha, request.ResolvedCommitSha, StringComparison.Ordinal))
         {
             CleanupResumeArtifacts(localPath);
             return new DownloadState(partialPath, metadataPath, true, 0, remoteInfo?.EntityTag, remoteInfo?.ContentLength, false);
@@ -880,6 +962,243 @@ public sealed class HuggingFaceDownloader : IDisposable
             return prefix + progress;
 
         return prefix + $"resumed {ByteFormatHelper.FormatBytes(resumedBytes)}, {progress}";
+    }
+
+    private static string? TryGetResolvedCommitSha(HttpHeaders headers)
+    {
+        return headers.TryGetValues(ResolvedCommitHeaderName, out var values)
+            ? NormalizeResolvedCommitSha(values.FirstOrDefault())
+            : null;
+    }
+
+    private static void UpdateResolvedCommitSha(DownloadRequest request, string? candidateCommitSha)
+    {
+        var normalizedCandidate = NormalizeResolvedCommitSha(candidateCommitSha);
+        if (!string.IsNullOrEmpty(normalizedCandidate))
+        {
+            request.ResolvedCommitSha = MergeResolvedCommitSha(
+                request.ResolvedCommitSha,
+                normalizedCandidate,
+                request.RepoId,
+                request.Revision);
+        }
+
+        ValidateExpectedCommitSha(request.ExpectedCommitSha, request.ResolvedCommitSha);
+    }
+
+    private static string? MergeResolvedCommitSha(
+        string? existingCommitSha,
+        string? candidateCommitSha,
+        string repoId,
+        string revision)
+    {
+        if (string.IsNullOrEmpty(candidateCommitSha))
+            return existingCommitSha;
+
+        if (string.IsNullOrEmpty(existingCommitSha))
+            return candidateCommitSha;
+
+        if (string.Equals(existingCommitSha, candidateCommitSha, StringComparison.Ordinal))
+            return existingCommitSha;
+
+        throw new InvalidOperationException(
+            $"Revision '{revision}' for repository '{repoId}' resolved to multiple commits ({existingCommitSha} and {candidateCommitSha}).");
+    }
+
+    private static void ValidateExpectedCommitSha(string? expectedCommitSha, string? resolvedCommitSha)
+    {
+        var normalizedExpectedCommitSha = NormalizeExpectedCommitSha(expectedCommitSha);
+        if (normalizedExpectedCommitSha is null || string.IsNullOrEmpty(resolvedCommitSha))
+            return;
+
+        if (!string.Equals(normalizedExpectedCommitSha, resolvedCommitSha, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Revision resolved to commit '{resolvedCommitSha}', but '{normalizedExpectedCommitSha}' was expected.");
+        }
+    }
+
+    private static string? NormalizeExpectedCommitSha(string? commitSha)
+    {
+        if (string.IsNullOrWhiteSpace(commitSha))
+            return null;
+
+        var normalized = commitSha.Trim().ToLowerInvariant();
+        if (normalized.Length != 40 || normalized.Any(ch => !Uri.IsHexDigit(ch)))
+        {
+            throw new ArgumentException(
+                $"Invalid commit SHA '{commitSha}'. Expected a 40-character hexadecimal Git commit.",
+                nameof(DownloadRequest.ExpectedCommitSha));
+        }
+
+        return normalized;
+    }
+
+    private static string? NormalizeResolvedCommitSha(string? commitSha)
+    {
+        if (string.IsNullOrWhiteSpace(commitSha))
+            return null;
+
+        return TryNormalizeCommitSha(commitSha, out var normalizedCommitSha)
+            ? normalizedCommitSha
+            : null;
+    }
+
+    private static bool TryNormalizeCommitSha(string? commitSha, out string? normalizedCommitSha)
+    {
+        normalizedCommitSha = null;
+        if (string.IsNullOrWhiteSpace(commitSha))
+            return false;
+
+        var candidate = commitSha.Trim().ToLowerInvariant();
+        if (candidate.Length != 40 || candidate.Any(ch => !Uri.IsHexDigit(ch)))
+            return false;
+
+        normalizedCommitSha = candidate;
+        return true;
+    }
+
+    private static void EnsureLocalDirectoryRevisionCompatibility(
+        string localDirectory,
+        string repoId,
+        string requestedRevision,
+        string? resolvedCommitSha)
+    {
+        if (!Directory.Exists(localDirectory) || !DirectoryHasModelContent(localDirectory))
+            return;
+
+        var downloadMetadata = TryReadDownloadResolutionMetadata(localDirectory);
+        if (downloadMetadata is not null)
+        {
+            EnsureCompatibleExistingMetadata(
+                repoId,
+                requestedRevision,
+                resolvedCommitSha,
+                downloadMetadata.RepoId,
+                downloadMetadata.RequestedRevision,
+                downloadMetadata.ResolvedCommitSha,
+                localDirectory);
+        }
+
+        var resolvedBundleManifest = TryReadResolvedBundleManifest(localDirectory);
+        if (resolvedBundleManifest is not null)
+        {
+            EnsureCompatibleExistingMetadata(
+                repoId,
+                requestedRevision,
+                resolvedCommitSha,
+                resolvedBundleManifest.RepoId,
+                resolvedBundleManifest.Revision,
+                resolvedBundleManifest.ResolvedCommitSha,
+                localDirectory);
+        }
+    }
+
+    private static void EnsureCompatibleExistingMetadata(
+        string repoId,
+        string requestedRevision,
+        string? resolvedCommitSha,
+        string existingRepoId,
+        string existingRequestedRevision,
+        string? existingResolvedCommitSha,
+        string localDirectory)
+    {
+        if (!string.Equals(existingRepoId, repoId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Local directory '{localDirectory}' already contains files pinned to repository '{existingRepoId}'. Use a different directory for '{repoId}'.");
+        }
+
+        if (!string.IsNullOrEmpty(resolvedCommitSha) && !string.IsNullOrEmpty(existingResolvedCommitSha))
+        {
+            if (!string.Equals(existingResolvedCommitSha, resolvedCommitSha, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Local directory '{localDirectory}' is pinned to commit '{existingResolvedCommitSha}', but '{requestedRevision}' resolved to '{resolvedCommitSha}'. Use a different directory or clear the existing files.");
+            }
+
+            return;
+        }
+
+        if (!string.Equals(existingRequestedRevision, requestedRevision, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Local directory '{localDirectory}' already contains files for revision '{existingRequestedRevision}'. Use a different directory for revision '{requestedRevision}'.");
+        }
+    }
+
+    private static bool DirectoryHasModelContent(string localDirectory)
+    {
+        return Directory.EnumerateFiles(localDirectory, "*", SearchOption.AllDirectories)
+            .Select(Path.GetFileName)
+            .Any(name =>
+                !string.Equals(name, HuggingFaceMetadataFileNames.DownloadResolutionMetadata, StringComparison.Ordinal)
+                && !string.Equals(name, HuggingFaceMetadataFileNames.ResolvedBundleManifest, StringComparison.Ordinal));
+    }
+
+    private static bool HasResolutionMetadata(string localDirectory)
+    {
+        return File.Exists(Path.Combine(localDirectory, HuggingFaceMetadataFileNames.DownloadResolutionMetadata))
+            || File.Exists(Path.Combine(localDirectory, HuggingFaceMetadataFileNames.ResolvedBundleManifest));
+    }
+
+    private static DownloadResolutionMetadata? TryReadDownloadResolutionMetadata(string localDirectory)
+    {
+        var metadataPath = Path.Combine(localDirectory, HuggingFaceMetadataFileNames.DownloadResolutionMetadata);
+        if (!File.Exists(metadataPath))
+            return null;
+
+        try
+        {
+            var json = File.ReadAllText(metadataPath);
+            return JsonSerializer.Deserialize<DownloadResolutionMetadata>(json, MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    private static ResolvedModelBundleManifest? TryReadResolvedBundleManifest(string localDirectory)
+    {
+        var metadataPath = Path.Combine(localDirectory, HuggingFaceMetadataFileNames.ResolvedBundleManifest);
+        if (!File.Exists(metadataPath))
+            return null;
+
+        try
+        {
+            var json = File.ReadAllText(metadataPath);
+            return JsonSerializer.Deserialize<ResolvedModelBundleManifest>(json, MetadataJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+    }
+
+    private static async Task WriteDownloadResolutionMetadataAsync(
+        DownloadRequest request,
+        CancellationToken cancellationToken)
+    {
+        var metadata = new DownloadResolutionMetadata
+        {
+            RepoId = request.RepoId,
+            RequestedRevision = request.Revision,
+            ResolvedCommitSha = request.ResolvedCommitSha,
+            GeneratedAtUtc = DateTimeOffset.UtcNow
+        };
+
+        var metadataPath = Path.Combine(request.LocalDirectory, HuggingFaceMetadataFileNames.DownloadResolutionMetadata);
+        var json = JsonSerializer.Serialize(metadata, MetadataJsonOptions);
+        await File.WriteAllTextAsync(metadataPath, json, cancellationToken).ConfigureAwait(false);
     }
 
     private static NormalizedBundleFile NormalizeBundleFile(ModelBundleFile file, string manifestRevision)
@@ -1084,7 +1403,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             _httpClient.Dispose();
     }
 
-    private sealed record RemoteFileInfo(long? ContentLength, string? EntityTag, bool SupportsRanges);
+    private sealed record RemoteFileInfo(long? ContentLength, string? EntityTag, bool SupportsRanges, string? ResolvedCommitSha);
 
     private sealed record BundleFileValidation(long? ExpectedSize, string? ExpectedSha256);
 
@@ -1111,6 +1430,8 @@ public sealed class HuggingFaceDownloader : IDisposable
     private sealed class PartialDownloadMetadata
     {
         public required string Revision { get; init; }
+
+        public string? ResolvedCommitSha { get; init; }
 
         public string? EntityTag { get; init; }
 

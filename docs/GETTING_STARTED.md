@@ -25,11 +25,30 @@ await downloader.DownloadFilesAsync(new DownloadRequest
     RepoId = "sentence-transformers/all-MiniLM-L6-v2",
     LocalDirectory = "./models/miniLM",
     RequiredFiles = ["onnx/model.onnx", "tokenizer.json"],
-    OptionalFiles = ["tokenizer_config.json", "vocab.txt"]
+    OptionalFiles = ["tokenizer_config.json", "vocab.txt"],
+    Revision = "refs/pr/42"
 });
 ```
 
-### 2) Check if files are already downloaded
+The downloader records the resolved commit in `./models/miniLM/.hf.download.resolved.json`.
+
+### 2) Pin a moving ref to an expected commit
+
+```csharp
+var request = new DownloadRequest
+{
+    RepoId = "my-org/my-model",
+    LocalDirectory = "./models/pinned",
+    RequiredFiles = ["model.onnx"],
+    Revision = "main",
+    ExpectedCommitSha = "1234567890abcdef1234567890abcdef12345678"
+};
+
+await downloader.DownloadFilesAsync(request);
+Console.WriteLine(request.ResolvedCommitSha);
+```
+
+### 3) Check if files are already downloaded
 
 ```csharp
 bool ready = downloader.AreFilesAvailable(
@@ -45,7 +64,7 @@ if (!ready)
 }
 ```
 
-### 3) Track download progress
+### 4) Track download progress
 
 ```csharp
 var progress = new Progress<DownloadProgress>(p =>
@@ -76,7 +95,7 @@ await downloader.DownloadFilesAsync(new DownloadRequest
 });
 ```
 
-### 4) Authenticate for private/gated repositories
+### 5) Authenticate for private/gated repositories
 
 ```csharp
 // Option A: Set the HF_TOKEN environment variable (recommended)
@@ -89,7 +108,7 @@ var downloader = new HuggingFaceDownloader(new HuggingFaceDownloaderOptions
 });
 ```
 
-### 5) Use with Dependency Injection
+### 6) Use with Dependency Injection
 
 ```csharp
 // In Program.cs or Startup.cs
@@ -114,7 +133,7 @@ public class MyModelService(HuggingFaceDownloader downloader)
 }
 ```
 
-### 6) Download from a specific branch or tag
+### 7) Download from a specific branch, tag, or commit
 
 ```csharp
 await downloader.DownloadFilesAsync(new DownloadRequest
@@ -122,11 +141,11 @@ await downloader.DownloadFilesAsync(new DownloadRequest
     RepoId = "my-org/my-model",
     LocalDirectory = "./models",
     RequiredFiles = ["model.onnx"],
-    Revision = "v2.0"  // branch, tag, or commit SHA
+    Revision = "release/v2"  // branch, tag, or commit SHA
 });
 ```
 
-### 7) Use platform-specific cache directories
+### 8) Use platform-specific cache directories
 
 ```csharp
 // Returns OS-appropriate cache path:
@@ -139,7 +158,7 @@ string safeName = DefaultPathHelper.SanitizeModelName("org/model-name");
 // → "org_model-name"
 ```
 
-### 8) Resume interrupted downloads by default
+### 9) Resume interrupted downloads by default
 
 ```csharp
 await downloader.DownloadFilesAsync(new DownloadRequest
@@ -163,7 +182,7 @@ await downloader.DownloadFilesAsync(new DownloadRequest
 });
 ```
 
-### 9) Disable atomic writes (for performance)
+### 10) Disable atomic writes (for performance)
 
 ```csharp
 await downloader.DownloadFilesAsync(new DownloadRequest

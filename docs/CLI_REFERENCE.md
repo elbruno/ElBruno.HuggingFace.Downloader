@@ -30,7 +30,7 @@ hfdownload download --manifest <bundle.json> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-o, --output <dir>` | Local directory for downloaded files | Platform cache dir |
+| `-o, --output <dir>` | Local directory for downloaded files | Revision-aware platform cache dir |
 | `-m, --manifest <file>` | JSON manifest describing a bundle to ensure | — |
 | `-r, --revision <ref>` | Git revision — branch, tag, or commit SHA | `main` |
 | `-t, --token <token>` | Hugging Face auth token (overrides `HF_TOKEN` env var) | — |
@@ -44,6 +44,12 @@ hfdownload download --manifest <bundle.json> [options]
 ```bash
 # Download specific files from a public repo
 hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
+
+# Download a specific tag into a distinct cache entry
+hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx --revision v1.0
+
+# Download a pinned commit
+hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx --revision 1234567890abcdef1234567890abcdef12345678
 
 # Download to a specific directory
 hfdownload download microsoft/Phi-4-mini-instruct-onnx model.onnx -o ./my-models
@@ -69,6 +75,7 @@ hfdownload download my-org/model weights.bin -q
 - `--manifest` is mutually exclusive with positional `<repo-id>` and `<files...>` arguments.
 - The manifest controls the bundle file list and default revision.
 - Existing files are validated before reuse; corrupted files are re-downloaded.
+- The default cache layout includes both the repo and the resolved commit SHA, so different revisions do not overwrite each other.
 - A resolved manifest is written to `<output>/.hf.bundle.resolved.json`.
 
 **Example manifest:**
@@ -112,6 +119,7 @@ hfdownload check <repo-id> <files...> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-o, --output <dir>` | Local directory to check | Platform cache dir |
+| `-r, --revision <ref>` | Requested revision or resolved commit SHA to match against cached entries | `main` |
 
 **Output:** Shows ✅ for present files and ❌ for missing files, plus a summary.
 
@@ -174,6 +182,7 @@ hfdownload info <repo-id> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--cache-dir <dir>` | Cache directory | Platform default |
+| `-r, --revision <ref>` | Requested revision or resolved commit SHA to inspect | Latest matching cache entry |
 | `--format <table\|json>` | Output format | `table` |
 
 **Example:**
@@ -197,6 +206,7 @@ Deletes all files for the specified model. Prompts for confirmation unless `--fo
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--cache-dir <dir>` | Cache directory | Platform default |
+| `-r, --revision <ref>` | Requested revision or resolved commit SHA to delete | All matching cached revisions |
 | `-f, --force` | Skip confirmation prompt | `false` |
 
 **Example:**
@@ -229,6 +239,7 @@ hfdownload delete-file <repo-id> <file> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--cache-dir <dir>` | Cache directory | Platform default |
+| `-r, --revision <ref>` | Requested revision or resolved commit SHA to target | Latest matching cache entry |
 | `-f, --force` | Skip confirmation prompt | `false` |
 
 ---

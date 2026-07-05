@@ -16,6 +16,11 @@ public sealed record class ResolvedModelBundleManifest
     public required string Revision { get; init; }
 
     /// <summary>
+    /// The immutable commit SHA resolved from <see cref="Revision"/> when available.
+    /// </summary>
+    public string? ResolvedCommitSha { get; init; }
+
+    /// <summary>
     /// UTC timestamp when the resolved manifest was written.
     /// </summary>
     public required DateTimeOffset GeneratedAtUtc { get; init; }

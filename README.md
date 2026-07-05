@@ -16,6 +16,7 @@ A .NET library and CLI tool to download files (ONNX models, tokenizers, voice pr
 - 🔑 **HF_TOKEN authentication** for gated/private repositories (env var or explicit)
 - 🔒 **Atomic writes** using temp files to avoid partial/corrupt downloads
 - 🔁 **Resumable downloads** using HTTP range requests for interrupted large files
+- 📌 **Revision pinning** with resolved commit metadata and optional expected commit enforcement
 - ✅ **Required vs optional files** — optional files fail silently
 - 🧾 **Manifest-based bundles** with SHA-256 and size validation
 - 📏 **HEAD requests** to resolve total download size before starting
@@ -51,6 +52,9 @@ Once installed, use the `hfdownload` command:
 # Download model files
 hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
 
+# Download a specific tag into a revision-aware cache directory
+hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx --revision v1.0
+
 # Restart from scratch instead of resuming a preserved partial download
 hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx --no-resume
 
@@ -81,13 +85,18 @@ using ElBruno.HuggingFace;
 
 using var downloader = new HuggingFaceDownloader();
 
-await downloader.DownloadFilesAsync(new DownloadRequest
+var request = new DownloadRequest
 {
     RepoId = "sentence-transformers/all-MiniLM-L6-v2",
     LocalDirectory = "./models/miniLM",
     RequiredFiles = ["onnx/model.onnx", "tokenizer.json"],
-    OptionalFiles = ["tokenizer_config.json", "vocab.txt"]
-});
+    OptionalFiles = ["tokenizer_config.json", "vocab.txt"],
+    Revision = "refs/pr/42"
+};
+
+await downloader.DownloadFilesAsync(request);
+
+Console.WriteLine($"Resolved commit: {request.ResolvedCommitSha}");
 ```
 
 ### 2) Ensure a manifest-based bundle with SHA-256 validation
@@ -119,7 +128,23 @@ Console.WriteLine(bundle.ResolvedManifestPath);
 
 Manifest-driven bundle downloads validate existing files before reuse, re-download corrupted files, and write a resolved manifest to `./models/phi4/.hf.bundle.resolved.json`.
 
-### 3) Check if files are already downloaded
+### 3) Pin a branch or tag to the expected commit
+
+```csharp
+var request = new DownloadRequest
+{
+    RepoId = "my-org/my-model",
+    LocalDirectory = "./models/pinned",
+    RequiredFiles = ["model.onnx"],
+    Revision = "main",
+    ExpectedCommitSha = "1234567890abcdef1234567890abcdef12345678"
+};
+
+await downloader.DownloadFilesAsync(request);
+Console.WriteLine(request.ResolvedCommitSha);
+```
+
+### 4) Check if files are already downloaded
 
 ```csharp
 bool ready = downloader.AreFilesAvailable(
@@ -135,7 +160,7 @@ if (!ready)
 }
 ```
 
-### 4) Track download progress
+### 5) Track download progress
 
 ```csharp
 var progress = new Progress<DownloadProgress>(p =>
@@ -155,7 +180,7 @@ await downloader.DownloadFilesAsync(new DownloadRequest
 });
 ```
 
-### 5) Authentication (Private/Gated Repos)
+### 6) Authentication (Private/Gated Repos)
 
 Set the `HF_TOKEN` environment variable, or pass it explicitly:
 
@@ -166,7 +191,7 @@ var downloader = new HuggingFaceDownloader(new HuggingFaceDownloaderOptions
 });
 ```
 
-### 6) Dependency Injection
+### 7) Dependency Injection
 
 ```csharp
 builder.Services.AddHuggingFaceDownloader(options =>
@@ -188,6 +213,8 @@ public class MyModelService(HuggingFaceDownloader downloader)
     }
 }
 ```
+
+Direct downloads also write `./models/.../.hf.download.resolved.json` so callers can inspect the requested revision and resolved commit later.
 
 ## Documentation
 
