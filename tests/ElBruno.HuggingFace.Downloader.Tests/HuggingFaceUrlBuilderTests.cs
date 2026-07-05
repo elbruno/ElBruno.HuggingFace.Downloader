@@ -124,13 +124,12 @@ public class HuggingFaceUrlBuilderTests
     }
 
     [Theory]
-    [InlineData("branch/name")]
     [InlineData("refs/heads/main")]
-    public void GetFileUrl_RevisionWithSlash_ThrowsArgumentException(string revision)
+    [InlineData("refs/pr/42")]
+    public void GetFileUrl_RevisionWithSlash_ReturnsExpectedUrl(string revision)
     {
-        var ex = Assert.Throws<ArgumentException>(() =>
-            HuggingFaceUrlBuilder.GetFileUrl("org/repo", "file.txt", revision));
-        Assert.Equal("revision", ex.ParamName);
+        var url = HuggingFaceUrlBuilder.GetFileUrl("org/repo", "file.txt", revision);
+        Assert.Equal($"https://huggingface.co/org/repo/resolve/{revision}/file.txt", url);
     }
 
     [Theory]
@@ -148,6 +147,16 @@ public class HuggingFaceUrlBuilderTests
     {
         var ex = Assert.Throws<ArgumentException>(() =>
             HuggingFaceUrlBuilder.GetFileUrl("org/repo", "file.txt", "branch\\name"));
+        Assert.Equal("revision", ex.ParamName);
+    }
+
+    [Theory]
+    [InlineData("/main")]
+    [InlineData("main/")]
+    public void GetFileUrl_RevisionStartsOrEndsWithSlash_ThrowsArgumentException(string revision)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            HuggingFaceUrlBuilder.GetFileUrl("org/repo", "file.txt", revision));
         Assert.Equal("revision", ex.ParamName);
     }
 }

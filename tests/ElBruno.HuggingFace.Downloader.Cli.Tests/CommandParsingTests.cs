@@ -132,6 +132,7 @@ public sealed class CommandParsingTests
         var optionNames = GetOptionNames(cmd);
 
         Assert.Contains("--cache-dir", optionNames);
+        Assert.Contains("--revision", optionNames);
         Assert.Contains("--format", optionNames);
     }
 
@@ -152,6 +153,7 @@ public sealed class CommandParsingTests
         var optionNames = GetOptionNames(cmd);
 
         Assert.Contains("--cache-dir", optionNames);
+        Assert.Contains("--revision", optionNames);
         Assert.Contains("--force", optionNames);
     }
 
@@ -173,6 +175,7 @@ public sealed class CommandParsingTests
         var optionNames = GetOptionNames(cmd);
 
         Assert.Contains("--cache-dir", optionNames);
+        Assert.Contains("--revision", optionNames);
         Assert.Contains("--force", optionNames);
     }
 

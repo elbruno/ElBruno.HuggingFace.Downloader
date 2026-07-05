@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Xunit;
 using ElBruno.HuggingFace.Cli.Services;
+using ElBruno.HuggingFace;
 
 namespace ElBruno.HuggingFace.Cli.Tests;
 
@@ -81,6 +83,27 @@ public sealed class CacheManagerTests : IDisposable
         Assert.Equal(0, model.FileCount);
     }
 
+    [Fact]
+    public void GetCachedModels_UsesResolutionMetadataAndExcludesMetadataFiles()
+    {
+        const string repoId = "microsoft/phi-2";
+        const string requestedRevision = "main";
+        const string resolvedCommitSha = "1234567890abcdef1234567890abcdef12345678";
+        var modelDir = CreateModelDir(
+            CacheManager.ComposeCacheDirectoryName(repoId, resolvedCommitSha),
+            ("weights.bin", 100));
+        WriteResolutionMetadata(modelDir, repoId, requestedRevision, resolvedCommitSha);
+
+        var result = _manager.GetCachedModels(_tempDir);
+
+        var model = Assert.Single(result);
+        Assert.Equal(repoId, model.RepoId);
+        Assert.Equal(requestedRevision, model.RequestedRevision);
+        Assert.Equal(resolvedCommitSha, model.ResolvedCommitSha);
+        Assert.Equal(100, model.TotalSize);
+        Assert.Equal(1, model.FileCount);
+    }
+
     // ── GetModelDetails ─────────────────────────────────────────────
 
     [Fact]
@@ -117,6 +140,25 @@ public sealed class CacheManagerTests : IDisposable
         Assert.NotNull(result);
         var file = Assert.Single(result.Files);
         Assert.Equal(4096, file.Size);
+    }
+
+    [Fact]
+    public void GetModelDetails_WithRevision_SelectsMatchingCachedRevision()
+    {
+        const string repoId = "microsoft/phi-2";
+        const string requestedRevision = "release/v2";
+        const string resolvedCommitSha = "1234567890abcdef1234567890abcdef12345678";
+        const string otherCommitSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var matchingDir = CreateModelDir(CacheManager.ComposeCacheDirectoryName(repoId, resolvedCommitSha), ("model.onnx", 50));
+        var otherDir = CreateModelDir(CacheManager.ComposeCacheDirectoryName(repoId, otherCommitSha), ("model.onnx", 60));
+        WriteResolutionMetadata(matchingDir, repoId, requestedRevision, resolvedCommitSha);
+        WriteResolutionMetadata(otherDir, repoId, "main", otherCommitSha);
+
+        var result = _manager.GetModelDetails(_tempDir, repoId, requestedRevision);
+
+        Assert.NotNull(result);
+        Assert.Equal(resolvedCommitSha, result!.ResolvedCommitSha);
+        Assert.Equal(requestedRevision, result.RequestedRevision);
     }
 
     // ── DeleteModel ─────────────────────────────────────────────────
@@ -249,7 +291,7 @@ public sealed class CacheManagerTests : IDisposable
 
     // ── Helpers ──────────────────────────────────────────────────────
 
-    private void CreateModelDir(string name, params (string fileName, int size)[] files)
+    private string CreateModelDir(string name, params (string fileName, int size)[] files)
     {
         var modelDir = Path.Combine(_tempDir, name);
         Directory.CreateDirectory(modelDir);
@@ -259,5 +301,20 @@ public sealed class CacheManagerTests : IDisposable
             var filePath = Path.Combine(modelDir, fileName);
             File.WriteAllBytes(filePath, new byte[size]);
         }
+
+        return modelDir;
+    }
+
+    private static void WriteResolutionMetadata(string modelDir, string repoId, string requestedRevision, string resolvedCommitSha)
+    {
+        var metadataPath = Path.Combine(modelDir, HuggingFaceMetadataFileNames.DownloadResolutionMetadata);
+        var json = JsonSerializer.Serialize(new DownloadResolutionMetadata
+        {
+            RepoId = repoId,
+            RequestedRevision = requestedRevision,
+            ResolvedCommitSha = resolvedCommitSha,
+            GeneratedAtUtc = DateTimeOffset.UtcNow
+        });
+        File.WriteAllText(metadataPath, json);
     }
 }

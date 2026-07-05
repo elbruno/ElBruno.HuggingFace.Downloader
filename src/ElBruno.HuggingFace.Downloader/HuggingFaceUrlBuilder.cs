@@ -57,10 +57,15 @@ public static class HuggingFaceUrlBuilder
         if (string.IsNullOrWhiteSpace(revision))
             throw new ArgumentException("Revision cannot be null or empty.", nameof(revision));
 
-        // Prevent path traversal in revision
-        if (revision.Contains("..") || revision.Contains('/') || revision.Contains('\\'))
+        if (revision.StartsWith('/') || revision.EndsWith('/'))
             throw new ArgumentException(
-                $"Invalid revision '{revision}'. Path separators are not allowed.",
+                $"Invalid revision '{revision}'. Revisions cannot start or end with '/'.",
+                nameof(revision));
+
+        // Prevent path traversal in revision while still allowing nested ref names such as refs/pr/42
+        if (revision.Contains("..") || revision.Contains('\\'))
+            throw new ArgumentException(
+                $"Invalid revision '{revision}'. Path traversal is not allowed.",
                 nameof(revision));
     }
 }

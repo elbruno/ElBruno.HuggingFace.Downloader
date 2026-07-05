@@ -1,5 +1,6 @@
 using System.CommandLine;
 using ElBruno.HuggingFace;
+using ElBruno.HuggingFace.Cli.Services;
 using Spectre.Console;
 
 namespace ElBruno.HuggingFace.Cli.Commands;
@@ -47,11 +48,14 @@ internal static class CheckCommand
             var repoId = parseResult.GetRequiredValue(repoIdArg);
             var files = parseResult.GetValue(filesArg) ?? [];
             var output = parseResult.GetValue(outputOption);
+            var revision = parseResult.GetValue(revisionOption);
+
+            var cacheManager = new CacheManager();
+            var cacheRoot = DefaultPathHelper.GetDefaultCacheDirectory("hfdownload");
 
             var localDir = output
-                ?? Path.Combine(
-                    DefaultPathHelper.GetDefaultCacheDirectory("hfdownload"),
-                    DefaultPathHelper.SanitizeModelName(repoId));
+                ?? cacheManager.FindModelPath(cacheRoot, repoId, revision)
+                ?? CacheManager.GetDefaultModelDirectory(cacheRoot, repoId, revision ?? "main");
 
             int present = 0;
             int missing = 0;

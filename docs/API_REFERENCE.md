@@ -24,6 +24,7 @@ The main entry point for downloading files from Hugging Face Hub repositories.
 |---|---|---|
 | `DownloadFilesAsync(DownloadRequest, CancellationToken)` | `Task` | Downloads files described by the request. Skips existing files. |
 | `EnsureBundleAsync(ModelBundleManifest, string, IProgress<DownloadProgress>?, CancellationToken)` | `Task<ModelBundleResult>` | Ensures a manifest-defined bundle, validates size and SHA-256, and writes a resolved manifest file. |
+| `ResolveCommitShaAsync(string, string, string, CancellationToken)` | `Task<string?>` | Resolves a branch or tag to an immutable commit SHA when the hub exposes it. |
 | `GetMissingFiles(IEnumerable<string>, string)` | `IReadOnlyList<string>` | Returns files that don't exist in the local directory |
 | `AreFilesAvailable(IEnumerable<string>, string)` | `bool` | Returns true if all files exist locally |
 | `Dispose()` | `void` | Disposes the HttpClient if owned by this instance |
@@ -45,6 +46,8 @@ Describes a set of files to download from a Hugging Face repository.
 | `RequiredFiles` | `IReadOnlyList<string>` | *(required)* | Files that must be downloaded (failure throws) |
 | `OptionalFiles` | `IReadOnlyList<string>?` | `null` | Files downloaded on best-effort basis |
 | `Revision` | `string` | `"main"` | Git branch, tag, or commit SHA |
+| `ExpectedCommitSha` | `string?` | `null` | Optional immutable commit SHA that the resolved revision must match |
+| `ResolvedCommitSha` | `string?` | `null` | Immutable commit SHA resolved by the downloader when available |
 | `Progress` | `IProgress<DownloadProgress>?` | `null` | Progress reporter |
 | `UseAtomicWrites` | `bool` | `true` | Write to temp file first, then rename |
 | `ResumePartialDownloads` | `bool` | `true` | Reuse preserved atomic partial downloads when the remote file still matches |
@@ -124,6 +127,7 @@ Records the resolved state of a validated bundle.
 |---|---|---|
 | `RepoId` | `string` | HF repository ID |
 | `Revision` | `string` | Single validated bundle revision |
+| `ResolvedCommitSha` | `string?` | Immutable commit SHA resolved from the requested revision when available |
 | `GeneratedAtUtc` | `DateTimeOffset` | UTC timestamp when the resolved manifest was written |
 | `Files` | `IReadOnlyList<ResolvedModelBundleFile>` | Resolved file entries |
 
@@ -155,6 +159,19 @@ Helper for reading and writing manifest JSON files.
 | `Serialize(ModelBundleManifest)` | `string` | Serializes a manifest to JSON text |
 | `LoadAsync(string, CancellationToken)` | `Task<ModelBundleManifest>` | Loads a manifest from a JSON file |
 | `SaveAsync(ModelBundleManifest, string, CancellationToken)` | `Task` | Saves a manifest to a JSON file |
+
+### `DownloadResolutionMetadata`
+
+Stored in `.hf.download.resolved.json` beside direct-download outputs.
+
+#### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `RepoId` | `string` | HF repository ID |
+| `RequestedRevision` | `string` | Requested branch, tag, or commit SHA |
+| `ResolvedCommitSha` | `string?` | Immutable commit SHA resolved by the downloader when available |
+| `GeneratedAtUtc` | `DateTimeOffset` | UTC timestamp when the metadata was written |
 
 ---
 
@@ -207,6 +224,13 @@ Configuration for the downloader.
 |---|---|
 | `GetDefaultCacheDirectory(string appName)` | Returns OS-appropriate cache directory |
 | `SanitizeModelName(string modelName)` | Replaces invalid path characters with `_` |
+
+### `HuggingFaceMetadataFileNames`
+
+| Field | Description |
+|---|---|
+| `DownloadResolutionMetadata` | `.hf.download.resolved.json` |
+| `ResolvedBundleManifest` | `.hf.bundle.resolved.json` |
 
 ---
 
