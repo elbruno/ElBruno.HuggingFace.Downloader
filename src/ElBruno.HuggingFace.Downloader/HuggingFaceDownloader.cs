@@ -743,8 +743,9 @@ public sealed class HuggingFaceDownloader : IDisposable
                 var buffer = new byte[FileStreamBufferSize];
                 while ((bytesRead = await contentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
                 {
-                    downloadedThisAttempt += bytesRead;
+                    await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
 
+                    downloadedThisAttempt += bytesRead;
                     var availableBytes = downloadState.ResumedBytes + downloadedThisAttempt;
                     request.Progress?.Report(new DownloadProgress
                     {
