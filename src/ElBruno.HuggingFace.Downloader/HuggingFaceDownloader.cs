@@ -17,6 +17,7 @@ public sealed class HuggingFaceDownloader : IDisposable
     private const string PartialMetadataSuffix = ".partial.json";
     private const string AtomicTempFileSuffix = ".tmp";
     private const string ResolvedCommitHeaderName = "X-Resolved-Revision";
+    private const int FileStreamBufferSize = 81920;
 
     private static readonly JsonSerializerOptions MetadataJsonOptions = new()
     {
@@ -735,19 +736,16 @@ public sealed class HuggingFaceDownloader : IDisposable
                     downloadState.ResumedBytes > 0 ? FileMode.Append : FileMode.Create,
                     FileAccess.Write,
                     FileShare.None,
-                    bufferSize: 81920,
+                    bufferSize: FileStreamBufferSize,
                     useAsync: true);
 
-                var buffer = new byte[81920];
-                while (true)
+                int bytesRead;
+                var buffer = new byte[FileStreamBufferSize];
+                while ((bytesRead = await contentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
                 {
-                    var bytesRead = await contentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-                    if (bytesRead == 0)
-                        break;
-
                     await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
-                    downloadedThisAttempt += bytesRead;
 
+                    downloadedThisAttempt += bytesRead;
                     var availableBytes = downloadState.ResumedBytes + downloadedThisAttempt;
                     request.Progress?.Report(new DownloadProgress
                     {
@@ -1306,7 +1304,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
-            bufferSize: 81920,
+            bufferSize: FileStreamBufferSize,
             useAsync: true);
         var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
         return Convert.ToHexString(hash).ToLowerInvariant();
