@@ -1529,6 +1529,128 @@ public class HuggingFaceDownloaderTests : IDisposable
     }
 
     #endregion
+
+    #region Cache Management API Tests
+
+    [Fact]
+    public async Task DeleteCachedFilesAsync_CacheRootWithSanitizedRepo_DeletesRepoDirectory()
+    {
+        var repoId = "microsoft/phi-2";
+        var repoDir = Path.Combine(_tempDir, DefaultPathHelper.SanitizeModelName(repoId));
+        Directory.CreateDirectory(repoDir);
+        await File.WriteAllTextAsync(Path.Combine(repoDir, "model.onnx"), "data");
+
+        await _downloader.DeleteCachedFilesAsync(repoId, _tempDir);
+
+        Assert.False(Directory.Exists(repoDir));
+    }
+
+    [Fact]
+    public async Task DeleteCachedFilesAsync_DirectRepoDirectory_DeletesDirectory()
+    {
+        var repoId = "meta-llama/Llama-3.2-1B";
+        var repoDir = Path.Combine(_tempDir, DefaultPathHelper.SanitizeModelName(repoId));
+        Directory.CreateDirectory(repoDir);
+        await File.WriteAllTextAsync(Path.Combine(repoDir, "config.json"), "{}");
+
+        await _downloader.DeleteCachedFilesAsync(repoId, repoDir);
+
+        Assert.False(Directory.Exists(repoDir));
+    }
+
+    [Fact]
+    public async Task DeleteCachedFilesAsync_MissingDirectory_NoOp()
+    {
+        var missingDir = Path.Combine(_tempDir, "not-found");
+
+        await _downloader.DeleteCachedFilesAsync("test/repo", missingDir);
+
+        Assert.False(Directory.Exists(missingDir));
+    }
+
+    [Fact]
+    public void IsCached_AllRequiredFilesPresent_ReturnsTrue()
+    {
+        var repoId = "sentence-transformers/all-MiniLM-L6-v2";
+        var repoDir = Path.Combine(_tempDir, DefaultPathHelper.SanitizeModelName(repoId));
+        Directory.CreateDirectory(Path.Combine(repoDir, "onnx"));
+        File.WriteAllText(Path.Combine(repoDir, "onnx", "model.onnx"), "binary");
+        File.WriteAllText(Path.Combine(repoDir, "tokenizer.json"), "{}");
+
+        var result = _downloader.IsCached(repoId, _tempDir, ["onnx/model.onnx", "tokenizer.json"]);
+
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsCached_AnyMissingRequiredFile_ReturnsFalse()
+    {
+        var repoId = "sentence-transformers/all-MiniLM-L6-v2";
+        var repoDir = Path.Combine(_tempDir, DefaultPathHelper.SanitizeModelName(repoId));
+        Directory.CreateDirectory(repoDir);
+        File.WriteAllText(Path.Combine(repoDir, "tokenizer.json"), "{}");
+
+        var result = _downloader.IsCached(repoId, _tempDir, ["onnx/model.onnx", "tokenizer.json"]);
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void ListCachedRepos_NonExistentDirectory_ReturnsEmpty()
+    {
+        var missingDir = Path.Combine(_tempDir, "missing-cache");
+
+        var result = _downloader.ListCachedRepos(missingDir);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public void ListCachedRepos_ReturnsRepoMetadata()
+    {
+        var repoA = Path.Combine(_tempDir, "repo-a");
+        var repoB = Path.Combine(_tempDir, "repo-b");
+        Directory.CreateDirectory(repoA);
+        Directory.CreateDirectory(repoB);
+        File.WriteAllBytes(Path.Combine(repoA, "a.bin"), new byte[100]);
+        File.WriteAllBytes(Path.Combine(repoB, "b.bin"), new byte[250]);
+        File.WriteAllBytes(Path.Combine(repoB, "c.bin"), new byte[50]);
+
+        var result = _downloader.ListCachedRepos(_tempDir);
+
+        Assert.Equal(2, result.Count);
+        var entryA = Assert.Single(result, r => r.LocalDirectory == repoA);
+        var entryB = Assert.Single(result, r => r.LocalDirectory == repoB);
+        Assert.Equal(100, entryA.TotalSizeBytes);
+        Assert.Equal(300, entryB.TotalSizeBytes);
+        Assert.True(entryA.LastModified <= DateTimeOffset.UtcNow);
+        Assert.True(entryB.LastModified <= DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public void GetCachedSize_NestedDirectory_ReturnsTotalBytes()
+    {
+        var repoDir = Path.Combine(_tempDir, "repo-size");
+        Directory.CreateDirectory(Path.Combine(repoDir, "nested"));
+        File.WriteAllBytes(Path.Combine(repoDir, "weights.bin"), new byte[120]);
+        File.WriteAllBytes(Path.Combine(repoDir, "nested", "config.json"), new byte[30]);
+
+        var result = _downloader.GetCachedSize(repoDir);
+
+        Assert.Equal(150, result);
+    }
+
+    [Fact]
+    public void GetCachedSize_MissingDirectory_ReturnsZero()
+    {
+        var missingDir = Path.Combine(_tempDir, "missing-size");
+
+        var result = _downloader.GetCachedSize(missingDir);
+
+        Assert.Equal(0, result);
+    }
+
+    #endregion
 }
 
 public class HuggingFaceDownloaderOptionsTests

@@ -214,6 +214,29 @@ public class MyModelService(HuggingFaceDownloader downloader)
 }
 ```
 
+### 8) Manage local cache programmatically
+
+```csharp
+var cacheRoot = DefaultPathHelper.GetDefaultCacheDirectory("hfdownload");
+var repoId = "sentence-transformers/all-MiniLM-L6-v2";
+
+// List all cached repositories
+var cachedRepos = downloader.ListCachedRepos(cacheRoot);
+
+// Check whether required files are cached for one repo
+bool isCached = downloader.IsCached(
+    repoId,
+    cacheRoot,
+    ["onnx/model.onnx", "tokenizer.json"]);
+
+// Get total cache size for one local repo directory
+long size = downloader.GetCachedSize(
+    Path.Combine(cacheRoot, DefaultPathHelper.SanitizeModelName(repoId)));
+
+// Delete cached files for the repo (safe no-op if not found)
+await downloader.DeleteCachedFilesAsync(repoId, cacheRoot);
+```
+
 Direct downloads also write `./models/.../.hf.download.resolved.json` so callers can inspect the requested revision and resolved commit later.
 
 ## Documentation

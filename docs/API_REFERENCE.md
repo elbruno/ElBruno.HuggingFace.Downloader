@@ -27,6 +27,10 @@ The main entry point for downloading files from Hugging Face Hub repositories.
 | `ResolveCommitShaAsync(string, string, string, CancellationToken)` | `Task<string?>` | Resolves a branch or tag to an immutable commit SHA when the hub exposes it. |
 | `GetMissingFiles(IEnumerable<string>, string)` | `IReadOnlyList<string>` | Returns files that don't exist in the local directory |
 | `AreFilesAvailable(IEnumerable<string>, string)` | `bool` | Returns true if all files exist locally |
+| `DeleteCachedFilesAsync(string, string, CancellationToken)` | `Task` | Deletes cached files for a repo from a cache root or direct repo directory path (no-op when missing) |
+| `IsCached(string, string, IEnumerable<string>)` | `bool` | Returns true when all required files are cached for the specified repo |
+| `ListCachedRepos(string)` | `IReadOnlyList<CachedRepoInfo>` | Lists cached repositories under a cache root with size and last-modified metadata |
+| `GetCachedSize(string)` | `long` | Returns total size in bytes for a cached repo directory |
 | `Dispose()` | `void` | Disposes the HttpClient if owned by this instance |
 
 ---
@@ -201,6 +205,20 @@ Configuration for the downloader.
 | `Timeout` | `TimeSpan` | 30 minutes | HTTP request timeout |
 | `ResolveFileSizesBeforeDownload` | `bool` | `true` | Issue HEAD requests for accurate progress |
 | `UserAgent` | `string?` | `null` | Custom User-Agent header |
+
+---
+
+### `CachedRepoInfo`
+
+Aggregate metadata for a cached repository.
+
+**Namespace:** `ElBruno.HuggingFace`
+
+| Property | Type | Description |
+|---|---|---|
+| `LocalDirectory` | `string` | Absolute path to the cached repository directory |
+| `TotalSizeBytes` | `long` | Total bytes for all files under the repository directory |
+| `LastModified` | `DateTimeOffset` | Most recent file/directory modification timestamp |
 
 ---
 

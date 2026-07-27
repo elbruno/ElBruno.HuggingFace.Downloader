@@ -83,6 +83,92 @@ public sealed class HuggingFaceDownloader : IDisposable
     }
 
     /// <summary>
+    /// Deletes cached files for a repository from either a cache root directory or a direct repo directory path.
+    /// If no matching cache directory exists, this method performs no action.
+    /// </summary>
+    public Task DeleteCachedFilesAsync(string repoId, string localDirectory, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+            throw new ArgumentException("RepoId cannot be null or empty.", nameof(repoId));
+        if (string.IsNullOrWhiteSpace(localDirectory))
+            throw new ArgumentException("LocalDirectory cannot be null or empty.", nameof(localDirectory));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!Directory.Exists(localDirectory))
+            return Task.CompletedTask;
+
+        var directoriesToDelete = ResolveRepoCacheDirectories(localDirectory, repoId);
+        foreach (var directory in directoriesToDelete)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Returns true if all required files for the specified repository are present in the local cache.
+    /// </summary>
+    public bool IsCached(string repoId, string localDirectory, IEnumerable<string> requiredFiles)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+            throw new ArgumentException("RepoId cannot be null or empty.", nameof(repoId));
+        if (string.IsNullOrWhiteSpace(localDirectory))
+            throw new ArgumentException("LocalDirectory cannot be null or empty.", nameof(localDirectory));
+        ArgumentNullException.ThrowIfNull(requiredFiles);
+
+        if (!Directory.Exists(localDirectory))
+            return false;
+
+        var repoDirectory = ResolveRepoCacheDirectories(localDirectory, repoId).FirstOrDefault();
+        if (repoDirectory is null || !Directory.Exists(repoDirectory))
+            return false;
+
+        return AreFilesAvailable(requiredFiles, repoDirectory);
+    }
+
+    /// <summary>
+    /// Lists cached repositories in the specified cache directory with aggregate size and last modification metadata.
+    /// </summary>
+    public IReadOnlyList<CachedRepoInfo> ListCachedRepos(string cacheDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(cacheDirectory))
+            throw new ArgumentException("Cache directory cannot be null or empty.", nameof(cacheDirectory));
+
+        if (!Directory.Exists(cacheDirectory))
+            return [];
+
+        return Directory
+            .EnumerateDirectories(cacheDirectory)
+            .Select(directory => new CachedRepoInfo(
+                LocalDirectory: directory,
+                TotalSizeBytes: GetCachedSize(directory),
+                LastModified: GetLastModified(directory)))
+            .OrderBy(repo => repo.LocalDirectory, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Returns the total size (in bytes) of all files in the specified cache directory.
+    /// </summary>
+    public long GetCachedSize(string localDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(localDirectory))
+            throw new ArgumentException("LocalDirectory cannot be null or empty.", nameof(localDirectory));
+
+        if (!Directory.Exists(localDirectory))
+            return 0;
+
+        return Directory
+            .EnumerateFiles(localDirectory, "*", SearchOption.AllDirectories)
+            .Select(file => new FileInfo(file).Length)
+            .Sum();
+    }
+
+    /// <summary>
     /// Resolves a branch or tag to an immutable commit SHA when the Hugging Face Hub exposes it.
     /// </summary>
     public async Task<string?> ResolveCommitShaAsync(
@@ -1376,6 +1462,58 @@ public sealed class HuggingFaceDownloader : IDisposable
     private static string GetPartialFilePath(string localPath) => localPath + PartialFileSuffix;
 
     private static string GetPartialMetadataPath(string localPath) => localPath + PartialMetadataSuffix;
+
+    private static IReadOnlyList<string> ResolveRepoCacheDirectories(string localDirectory, string repoId)
+    {
+        var fullLocalDirectory = Path.GetFullPath(localDirectory);
+        var sanitizedName = DefaultPathHelper.SanitizeModelName(repoId);
+        var normalizedRepoPath = repoId
+            .Replace('/', Path.DirectorySeparatorChar)
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Trim(Path.DirectorySeparatorChar);
+
+        var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var underRootSanitized = Path.GetFullPath(Path.Combine(fullLocalDirectory, sanitizedName));
+        var underRootDirect = Path.GetFullPath(Path.Combine(fullLocalDirectory, normalizedRepoPath));
+
+        if (Directory.Exists(underRootSanitized))
+            directories.Add(underRootSanitized);
+
+        if (Directory.Exists(underRootDirect))
+            directories.Add(underRootDirect);
+
+        if (directories.Count > 0)
+            return directories.ToList();
+
+        var localDirectoryName = new DirectoryInfo(fullLocalDirectory).Name;
+        if (string.Equals(localDirectoryName, sanitizedName, StringComparison.OrdinalIgnoreCase))
+        {
+            directories.Add(fullLocalDirectory);
+            return directories.ToList();
+        }
+
+        var localWithSeparator = fullLocalDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var repoSuffix = $"{Path.DirectorySeparatorChar}{normalizedRepoPath}";
+        if (localWithSeparator.EndsWith(repoSuffix, StringComparison.OrdinalIgnoreCase))
+            directories.Add(fullLocalDirectory);
+
+        return directories.ToList();
+    }
+
+    private static DateTimeOffset GetLastModified(string directory)
+    {
+        var directoryInfo = new DirectoryInfo(directory);
+        var lastModified = new DateTimeOffset(directoryInfo.LastWriteTimeUtc, TimeSpan.Zero);
+
+        foreach (var file in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+        {
+            var fileModified = new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
+            if (fileModified > lastModified)
+                lastModified = fileModified;
+        }
+
+        return lastModified;
+    }
 
     private static HttpClient CreateHttpClient(HuggingFaceDownloaderOptions options)
     {
