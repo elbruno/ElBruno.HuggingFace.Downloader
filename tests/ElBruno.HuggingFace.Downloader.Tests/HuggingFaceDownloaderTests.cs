@@ -1651,6 +1651,148 @@ public class HuggingFaceDownloaderTests : IDisposable
     }
 
     #endregion
+
+    #region ListRepoFilesAsync Tests
+
+    [Fact]
+    public async Task ListRepoFilesAsync_EmptyRepoId_ThrowsArgumentException()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() => _downloader.ListRepoFilesAsync(""));
+    }
+
+    [Fact]
+    public async Task ListRepoFilesAsync_ReturnsFilesAndDirectories()
+    {
+        const string json = """
+        [
+            {"type":"file","path":"config.json","size":123,"oid":"abc"},
+            {"type":"directory","path":"onnx","oid":"def"},
+            {"type":"file","path":"onnx/model.onnx","size":456,"oid":"ghi"}
+        ]
+        """;
+
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json)
+            }));
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient);
+
+        var result = await downloader.ListRepoFilesAsync("test/repo");
+
+        Assert.Equal(3, result.Count);
+        Assert.Contains(result, f => f.Path == "config.json" && f.SizeBytes == 123 && !f.IsDirectory);
+        Assert.Contains(result, f => f.Path == "onnx" && f.IsDirectory && f.SizeBytes == null);
+        Assert.Contains(result, f => f.Path == "onnx/model.onnx" && f.SizeBytes == 456 && !f.IsDirectory);
+    }
+
+    [Fact]
+    public async Task ListRepoFilesAsync_UsesCorrectUrlForRepoType()
+    {
+        string? capturedUrl = null;
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            capturedUrl = request.RequestUri!.ToString();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("[]")
+            });
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient);
+
+        await downloader.ListRepoFilesAsync("test/dataset-repo", RepoType.Dataset, "main");
+
+        Assert.Contains("/api/datasets/test/dataset-repo/tree/main", capturedUrl);
+    }
+
+    [Fact]
+    public async Task ListRepoFilesAsync_FollowsPaginationLinkHeader()
+    {
+        var callCount = 0;
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            callCount++;
+            var url = request.RequestUri!.ToString();
+
+            if (!url.Contains("cursor="))
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""[{"type":"file","path":"file1.bin","size":10}]""")
+                };
+                response.Headers.Add("Link", "<https://huggingface.co/api/models/test/repo/tree/main?cursor=abc123>; rel=\"next\"");
+                return Task.FromResult(response);
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""[{"type":"file","path":"file2.bin","size":20}]""")
+            });
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient);
+
+        var result = await downloader.ListRepoFilesAsync("test/repo");
+
+        Assert.Equal(2, callCount);
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, f => f.Path == "file1.bin");
+        Assert.Contains(result, f => f.Path == "file2.bin");
+    }
+
+    [Fact]
+    public async Task ListRepoFilesAsync_RepoNotFound_ThrowsInvalidOperationException()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)));
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => downloader.ListRepoFilesAsync("test/missing-repo"));
+
+        Assert.Contains("not found (404)", ex.Message);
+    }
+
+    [Fact]
+    public async Task ListRepoFilesAsync_Unauthorized_ThrowsWithTokenGuidance()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized)));
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => downloader.ListRepoFilesAsync("test/private-repo"));
+
+        Assert.Contains("Access denied", ex.Message);
+    }
+
+    [Fact]
+    public async Task ListRepoFilesAsync_EmptyRepo_ReturnsEmptyList()
+    {
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("[]")
+            }));
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient);
+
+        var result = await downloader.ListRepoFilesAsync("test/empty-repo");
+
+        Assert.Empty(result);
+    }
+
+    #endregion
 }
 
 public class HuggingFaceDownloaderOptionsTests

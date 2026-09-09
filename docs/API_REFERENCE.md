@@ -25,6 +25,7 @@ The main entry point for downloading files from Hugging Face Hub repositories.
 | `DownloadFilesAsync(DownloadRequest, CancellationToken)` | `Task` | Downloads files described by the request. Skips existing files. |
 | `EnsureBundleAsync(ModelBundleManifest, string, IProgress<DownloadProgress>?, CancellationToken)` | `Task<ModelBundleResult>` | Ensures a manifest-defined bundle, validates size and SHA-256, and writes a resolved manifest file. |
 | `ResolveCommitShaAsync(string, string, string, CancellationToken)` | `Task<string?>` | Resolves a branch or tag to an immutable commit SHA when the hub exposes it. |
+| `ListRepoFilesAsync(string, RepoType, string, string?, CancellationToken)` | `Task<IReadOnlyList<RepoTreeEntry>>` | Lists files/directories in a repo (model, dataset, or space) without needing to know file names in advance. |
 | `GetMissingFiles(IEnumerable<string>, string)` | `IReadOnlyList<string>` | Returns files that don't exist in the local directory |
 | `AreFilesAvailable(IEnumerable<string>, string)` | `bool` | Returns true if all files exist locally |
 | `DeleteCachedFilesAsync(string, string, CancellationToken)` | `Task` | Deletes cached files for a repo from a cache root or direct repo directory path (no-op when missing) |
@@ -222,6 +223,35 @@ Aggregate metadata for a cached repository.
 
 ---
 
+### `RepoType` (enum)
+
+The kind of Hugging Face repository being addressed.
+
+**Namespace:** `ElBruno.HuggingFace`
+
+| Value | Description |
+|---|---|
+| `Model` | A model repository (`/api/models/...`) — the default. |
+| `Dataset` | A dataset repository (`/api/datasets/...`). |
+| `Space` | A Space repository (`/api/spaces/...`). |
+
+---
+
+### `RepoTreeEntry`
+
+A single file or directory entry returned by `ListRepoFilesAsync`.
+
+**Namespace:** `ElBruno.HuggingFace`
+
+| Property | Type | Description |
+|---|---|---|
+| `Path` | `string` | Path of the entry relative to the repository root. |
+| `SizeBytes` | `long?` | File size in bytes; `null` for directories. |
+| `IsDirectory` | `bool` | Whether the entry is a directory. |
+| `Oid` | `string?` | Git blob/tree OID for the entry, when available. |
+
+---
+
 ## Static Helper Classes
 
 ### `HuggingFaceUrlBuilder`
@@ -229,6 +259,7 @@ Aggregate metadata for a cached repository.
 | Method | Description |
 |---|---|
 | `GetFileUrl(string repoId, string filePath, string revision = "main")` | Returns the HF download URL for a file |
+| `GetTreeUrl(string repoId, RepoType repoType = RepoType.Model, string revision = "main", string? path = null, bool recursive = true, string? cursor = null)` | Returns the HF Hub tree API URL used to list repo files/directories, with optional pagination cursor |
 
 ### `ByteFormatHelper`
 

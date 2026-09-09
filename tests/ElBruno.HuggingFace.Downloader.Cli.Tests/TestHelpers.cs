@@ -18,6 +18,7 @@ internal static class TestHelpers
 
         root.Add(DownloadCommand.Create());
         root.Add(CheckCommand.Create());
+        root.Add(FilesCommand.Create());
         root.Add(ListCommand.Create());
         root.Add(InfoCommand.Create());
         root.Add(DeleteCommand.Create());

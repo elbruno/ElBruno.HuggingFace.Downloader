@@ -169,6 +169,127 @@ public sealed class HuggingFaceDownloader : IDisposable
     }
 
     /// <summary>
+    /// Lists the files and directories contained in a Hugging Face repository, without needing to know file names
+    /// in advance. Use the returned paths to populate a <see cref="DownloadRequest"/>.
+    /// </summary>
+    /// <param name="repoId">Repository ID (e.g., "sentence-transformers/all-MiniLM-L6-v2").</param>
+    /// <param name="repoType">The kind of repository (model, dataset, or space). Defaults to <see cref="RepoType.Model"/>.</param>
+    /// <param name="revision">Git branch, tag, or commit SHA. Defaults to "main".</param>
+    /// <param name="path">Optional subdirectory to list. Defaults to the repository root.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    public async Task<IReadOnlyList<RepoTreeEntry>> ListRepoFilesAsync(
+        string repoId,
+        RepoType repoType = RepoType.Model,
+        string revision = "main",
+        string? path = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId))
+            throw new ArgumentException("RepoId cannot be null or empty.", nameof(repoId));
+
+        var results = new List<RepoTreeEntry>();
+        string? cursor = null;
+
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var url = HuggingFaceUrlBuilder.GetTreeUrl(repoId, repoType, revision, path, recursive: true, cursor: cursor);
+
+            _logger.LogInformation("Listing repo files for {RepoId} via {Url}", repoId, url);
+
+            using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var statusCode = response.StatusCode;
+                if (statusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+                {
+                    throw new InvalidOperationException(
+                        $"Access denied listing files for repository '{repoId}'. " +
+                        "The repository may be private or gated. Ensure HF_TOKEN is set with appropriate permissions.");
+                }
+
+                if (statusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    throw new InvalidOperationException(
+                        $"Repository '{repoId}' not found (404).");
+                }
+
+                throw new InvalidOperationException(
+                    $"Failed to list files for repository '{repoId}'. Status: {statusCode}");
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            foreach (var entry in document.RootElement.EnumerateArray())
+            {
+                var entryPath = entry.GetProperty("path").GetString() ?? string.Empty;
+                var entryType = entry.TryGetProperty("type", out var typeProp) ? typeProp.GetString() : null;
+                var isDirectory = string.Equals(entryType, "directory", StringComparison.OrdinalIgnoreCase);
+                long? size = entry.TryGetProperty("size", out var sizeProp) && sizeProp.ValueKind == JsonValueKind.Number
+                    ? sizeProp.GetInt64()
+                    : null;
+                var oid = entry.TryGetProperty("oid", out var oidProp) ? oidProp.GetString() : null;
+
+                results.Add(new RepoTreeEntry(entryPath, size, isDirectory, oid));
+            }
+
+            cursor = ExtractNextCursor(response.Headers);
+        }
+        while (!string.IsNullOrEmpty(cursor));
+
+        return results;
+    }
+
+    private static string? ExtractNextCursor(HttpResponseHeaders headers)
+    {
+        if (!headers.TryGetValues("Link", out var linkValues))
+            return null;
+
+        foreach (var linkHeader in linkValues)
+        {
+            foreach (var linkPart in linkHeader.Split(','))
+            {
+                if (!linkPart.Contains("rel=\"next\"", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var start = linkPart.IndexOf('<');
+                var end = linkPart.IndexOf('>');
+                if (start < 0 || end < 0 || end <= start)
+                    continue;
+
+                var nextUrl = linkPart.Substring(start + 1, end - start - 1);
+                if (!Uri.TryCreate(nextUrl, UriKind.Absolute, out var uri))
+                    continue;
+
+                var cursorValue = ExtractQueryParam(uri.Query, "cursor");
+                if (!string.IsNullOrEmpty(cursorValue))
+                    return cursorValue;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ExtractQueryParam(string query, string paramName)
+    {
+        if (string.IsNullOrEmpty(query))
+            return null;
+
+        var trimmed = query.TrimStart('?');
+        foreach (var pair in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            if (parts.Length == 2 && string.Equals(parts[0], paramName, StringComparison.OrdinalIgnoreCase))
+                return Uri.UnescapeDataString(parts[1]);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Resolves a branch or tag to an immutable commit SHA when the Hugging Face Hub exposes it.
     /// </summary>
     public async Task<string?> ResolveCommitShaAsync(

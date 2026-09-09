@@ -7,6 +7,7 @@ var rootCommand = new RootCommand(
 // Download & check commands
 rootCommand.Add(DownloadCommand.Create());
 rootCommand.Add(CheckCommand.Create());
+rootCommand.Add(FilesCommand.Create());
 
 // Cache management commands
 rootCommand.Add(ListCommand.Create());
