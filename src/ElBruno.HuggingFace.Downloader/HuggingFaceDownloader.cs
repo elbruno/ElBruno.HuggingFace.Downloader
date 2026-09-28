@@ -194,7 +194,8 @@ public sealed class HuggingFaceDownloader : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var url = HuggingFaceUrlBuilder.GetTreeUrl(repoId, repoType, revision, path, recursive: true, cursor: cursor);
+            var url = HuggingFaceUrlBuilder.GetTreeUrl(
+                repoId, _options.ResolveEndpoint(), repoType, revision, path, recursive: true, cursor: cursor);
 
             _logger.LogInformation("Listing repo files for {RepoId} via {Url}", repoId, url);
 
@@ -301,7 +302,7 @@ public sealed class HuggingFaceDownloader : IDisposable
         if (TryNormalizeCommitSha(revision, out var normalizedCommitSha))
             return normalizedCommitSha;
 
-        var url = HuggingFaceUrlBuilder.GetFileUrl(repoId, filePath, revision);
+        var url = HuggingFaceUrlBuilder.GetFileUrl(repoId, filePath, revision, _options.ResolveEndpoint());
         var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
         return NormalizeResolvedCommitSha(remoteInfo?.ResolvedCommitSha);
     }
@@ -393,7 +394,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             if (!_options.ResolveFileSizesBeforeDownload && !hasPartial)
                 continue;
 
-            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, path, request.Revision);
+            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, path, request.Revision, _options.ResolveEndpoint());
             var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
             UpdateResolvedCommitSha(request, remoteInfo?.ResolvedCommitSha);
             remoteFileInfos[path] = remoteInfo;
@@ -415,7 +416,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             if (!string.IsNullOrEmpty(localDir))
                 Directory.CreateDirectory(localDir);
 
-            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, filePath, request.Revision);
+            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, filePath, request.Revision, _options.ResolveEndpoint());
             var remoteInfo = remoteFileInfos.GetValueOrDefault(filePath);
 
             try
@@ -615,7 +616,7 @@ public sealed class HuggingFaceDownloader : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var url = HuggingFaceUrlBuilder.GetFileUrl(manifest.RepoId, file.Path, file.Revision);
+            var url = HuggingFaceUrlBuilder.GetFileUrl(manifest.RepoId, file.Path, file.Revision, _options.ResolveEndpoint());
             var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
             resolvedCommitSha = MergeResolvedCommitSha(
                 resolvedCommitSha,
@@ -644,7 +645,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             if (!string.IsNullOrEmpty(localDir))
                 Directory.CreateDirectory(localDir);
 
-            var url = HuggingFaceUrlBuilder.GetFileUrl(manifest.RepoId, file.Path, file.Revision);
+            var url = HuggingFaceUrlBuilder.GetFileUrl(manifest.RepoId, file.Path, file.Revision, _options.ResolveEndpoint());
             var request = new DownloadRequest
             {
                 RepoId = manifest.RepoId,

@@ -12,12 +12,14 @@ public class AuthenticationAndConfigurationTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly string? _originalHfToken;
+    private readonly string? _originalHfEndpoint;
 
     public AuthenticationAndConfigurationTests()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"hf_auth_test_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempDir);
         _originalHfToken = Environment.GetEnvironmentVariable("HF_TOKEN");
+        _originalHfEndpoint = Environment.GetEnvironmentVariable("HF_ENDPOINT");
     }
 
     public void Dispose()
@@ -27,6 +29,8 @@ public class AuthenticationAndConfigurationTests : IDisposable
             Environment.SetEnvironmentVariable("HF_TOKEN", _originalHfToken);
         else
             Environment.SetEnvironmentVariable("HF_TOKEN", null);
+
+        Environment.SetEnvironmentVariable("HF_ENDPOINT", _originalHfEndpoint);
 
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, true);
@@ -101,6 +105,62 @@ public class AuthenticationAndConfigurationTests : IDisposable
         var token = options.ResolveToken();
 
         Assert.Equal("", token);
+    }
+
+    #endregion
+
+    #region Endpoint Resolution Tests
+
+    [Fact]
+    public void ResolveEndpoint_WithConfiguredEndpoint_PrefersConfiguredEndpoint()
+    {
+        Environment.SetEnvironmentVariable("HF_ENDPOINT", "https://env.example");
+        var options = new HuggingFaceDownloaderOptions { Endpoint = "https://configured.example" };
+
+        Assert.Equal("https://configured.example", options.ResolveEndpoint());
+    }
+
+    [Fact]
+    public void ResolveEndpoint_WithoutConfiguredEndpoint_UsesHfEndpointEnvironmentVariable()
+    {
+        Environment.SetEnvironmentVariable("HF_ENDPOINT", "https://registry.example");
+
+        Assert.Equal("https://registry.example", new HuggingFaceDownloaderOptions().ResolveEndpoint());
+    }
+
+    [Fact]
+    public void ResolveEndpoint_WithoutConfiguredEndpointOrEnvironmentVariable_UsesDefaultEndpoint()
+    {
+        Environment.SetEnvironmentVariable("HF_ENDPOINT", null);
+
+        Assert.Equal("https://huggingface.co", new HuggingFaceDownloaderOptions().ResolveEndpoint());
+    }
+
+    [Fact]
+    public async Task DownloadFilesAsync_WithConfiguredEndpoint_RequestsFileFromEndpoint()
+    {
+        string? capturedUrl = null;
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            capturedUrl = request.RequestUri!.ToString();
+            return Task.FromResult(CreateFileResponse("registry content"));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient, new HuggingFaceDownloaderOptions
+        {
+            Endpoint = "https://registry.example/hub/",
+            ResolveFileSizesBeforeDownload = false
+        });
+
+        await downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/private-repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.onnx"]
+        });
+
+        Assert.Equal("https://registry.example/hub/test/private-repo/resolve/main/model.onnx", capturedUrl);
     }
 
     #endregion

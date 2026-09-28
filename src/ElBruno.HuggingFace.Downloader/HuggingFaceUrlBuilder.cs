@@ -5,7 +5,7 @@ namespace ElBruno.HuggingFace;
 /// </summary>
 public static class HuggingFaceUrlBuilder
 {
-    private const string BaseUrl = "https://huggingface.co";
+    internal const string DefaultEndpoint = "https://huggingface.co";
 
     /// <summary>
     /// Returns the URL to download a file from a Hugging Face repository.
@@ -15,11 +15,23 @@ public static class HuggingFaceUrlBuilder
     /// <param name="revision">Branch, tag, or commit SHA. Defaults to "main".</param>
     public static string GetFileUrl(string repoId, string filePath, string revision = "main")
     {
+        return GetFileUrl(repoId, filePath, revision, endpoint: null);
+    }
+
+    /// <summary>
+    /// Returns the URL to download a file from a repository at a custom Hub endpoint.
+    /// </summary>
+    /// <param name="repoId">Repository ID (e.g., "sentence-transformers/all-MiniLM-L6-v2").</param>
+    /// <param name="filePath">Path within the repository (e.g., "onnx/model.onnx").</param>
+    /// <param name="revision">Branch, tag, or commit SHA. Defaults to "main".</param>
+    /// <param name="endpoint">Absolute HTTP or HTTPS Hub endpoint. Defaults to the HF_ENDPOINT environment variable or Hugging Face Hub.</param>
+    internal static string GetFileUrl(string repoId, string filePath, string revision, string? endpoint)
+    {
         ValidateRepoId(repoId);
         ValidateFilePath(filePath);
         ValidateRevision(revision);
 
-        return $"{BaseUrl}/{repoId}/resolve/{revision}/{filePath}";
+        return $"{ResolveEndpoint(endpoint)}/{repoId}/resolve/{revision}/{filePath}";
     }
 
     /// <summary>
@@ -33,6 +45,28 @@ public static class HuggingFaceUrlBuilder
     /// <param name="cursor">Pagination cursor returned by a previous call, if any.</param>
     public static string GetTreeUrl(
         string repoId,
+        RepoType repoType = RepoType.Model,
+        string revision = "main",
+        string? path = null,
+        bool recursive = true,
+        string? cursor = null)
+    {
+        return GetTreeUrl(repoId, endpoint: null, repoType, revision, path, recursive, cursor);
+    }
+
+    /// <summary>
+    /// Returns the Hugging Face Hub tree API URL for a custom endpoint.
+    /// </summary>
+    /// <param name="repoId">Repository ID (e.g., "sentence-transformers/all-MiniLM-L6-v2").</param>
+    /// <param name="repoType">The kind of repository (model, dataset, or space).</param>
+    /// <param name="revision">Branch, tag, or commit SHA. Defaults to "main".</param>
+    /// <param name="path">Optional subdirectory path within the repository to list. Defaults to the repository root.</param>
+    /// <param name="recursive">If <see langword="true"/>, requests the full tree recursively in a single call.</param>
+    /// <param name="cursor">Pagination cursor returned by a previous call, if any.</param>
+    /// <param name="endpoint">Absolute HTTP or HTTPS Hub endpoint. Defaults to the HF_ENDPOINT environment variable or Hugging Face Hub.</param>
+    internal static string GetTreeUrl(
+        string repoId,
+        string? endpoint,
         RepoType repoType = RepoType.Model,
         string revision = "main",
         string? path = null,
@@ -53,7 +87,7 @@ public static class HuggingFaceUrlBuilder
             _ => throw new ArgumentOutOfRangeException(nameof(repoType), repoType, "Unknown repository type.")
         };
 
-        var url = $"{BaseUrl}/api/{repoTypeSegment}/{repoId}/tree/{revision}";
+        var url = $"{ResolveEndpoint(endpoint)}/api/{repoTypeSegment}/{repoId}/tree/{revision}";
         if (!string.IsNullOrEmpty(path))
             url += $"/{path}";
 
@@ -67,6 +101,24 @@ public static class HuggingFaceUrlBuilder
             url += "?" + string.Join("&", query);
 
         return url;
+    }
+
+    private static string ResolveEndpoint(string? endpoint)
+    {
+        endpoint ??= Environment.GetEnvironmentVariable("HF_ENDPOINT") ?? DefaultEndpoint;
+
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri)
+            || (endpointUri.Scheme != Uri.UriSchemeHttp && endpointUri.Scheme != Uri.UriSchemeHttps)
+            || !string.IsNullOrEmpty(endpointUri.Query)
+            || !string.IsNullOrEmpty(endpointUri.Fragment)
+            || !string.IsNullOrEmpty(endpointUri.UserInfo))
+        {
+            throw new ArgumentException(
+                "Endpoint must be an absolute HTTP or HTTPS URL without query, fragment, or user information.",
+                nameof(endpoint));
+        }
+
+        return endpoint.TrimEnd('/');
     }
 
     private static void ValidateRepoId(string repoId)
