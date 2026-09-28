@@ -14,6 +14,7 @@ A .NET library and CLI tool to download files (ONNX models, tokenizers, voice pr
 - 📦 **Download any file** from public or private Hugging Face repositories
 - 📊 **Rich progress reporting** with stages (Checking → Downloading → Validating → Complete)
 - 🔑 **HF_TOKEN authentication** for gated/private repositories (env var or explicit)
+- 🌐 **Custom Hub endpoints** via `HF_ENDPOINT` or downloader options
 - 🔒 **Atomic writes** using temp files to avoid partial/corrupt downloads
 - 🔁 **Resumable downloads** using HTTP range requests for interrupted large files
 - 📌 **Revision pinning** with resolved commit metadata and optional expected commit enforcement
@@ -217,7 +218,20 @@ var downloader = new HuggingFaceDownloader(new HuggingFaceDownloaderOptions
 });
 ```
 
-### 8) Dependency Injection
+### 8) Use a private Hub endpoint
+
+Set the `HF_ENDPOINT` environment variable, or configure the endpoint explicitly:
+
+```csharp
+var downloader = new HuggingFaceDownloader(new HuggingFaceDownloaderOptions
+{
+    Endpoint = "https://huggingface.internal"
+});
+```
+
+The explicit `Endpoint` takes precedence over `HF_ENDPOINT`; if neither is set, the downloader uses `https://huggingface.co`.
+
+### 9) Dependency Injection
 
 ```csharp
 builder.Services.AddHuggingFaceDownloader(options =>

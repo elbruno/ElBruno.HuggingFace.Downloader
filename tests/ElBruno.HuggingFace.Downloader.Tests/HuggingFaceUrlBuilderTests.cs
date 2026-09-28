@@ -28,6 +28,14 @@ public class HuggingFaceUrlBuilderTests
         Assert.Equal("https://huggingface.co/user/model/resolve/main/voices/en/metadata.json", url);
     }
 
+    [Fact]
+    public void GetFileUrl_CustomEndpoint_UsesEndpointAndTrimsTrailingSlash()
+    {
+        var url = HuggingFaceUrlBuilder.GetFileUrl("org/repo", "model.onnx", "main", "https://registry.example/hub/");
+
+        Assert.Equal("https://registry.example/hub/org/repo/resolve/main/model.onnx", url);
+    }
+
     // --- RepoId validation tests ---
 
     [Theory]
@@ -167,6 +175,26 @@ public class HuggingFaceUrlBuilderTests
     {
         var url = HuggingFaceUrlBuilder.GetTreeUrl("org/repo");
         Assert.Equal("https://huggingface.co/api/models/org/repo/tree/main?recursive=true", url);
+    }
+
+    [Fact]
+    public void GetTreeUrl_CustomEndpoint_UsesEndpoint()
+    {
+        var url = HuggingFaceUrlBuilder.GetTreeUrl("org/repo", "https://registry.example");
+
+        Assert.Equal("https://registry.example/api/models/org/repo/tree/main?recursive=true", url);
+    }
+
+    [Theory]
+    [InlineData("relative/path")]
+    [InlineData("ftp://registry.example")]
+    [InlineData("https://registry.example?query=1")]
+    public void GetFileUrl_InvalidEndpoint_ThrowsArgumentException(string endpoint)
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            HuggingFaceUrlBuilder.GetFileUrl("org/repo", "file.txt", "main", endpoint));
+
+        Assert.Equal("endpoint", ex.ParamName);
     }
 
     [Theory]

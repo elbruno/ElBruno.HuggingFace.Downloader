@@ -202,6 +202,7 @@ Configuration for the downloader.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
+| `Endpoint` | `string?` | `null` | Hugging Face Hub endpoint (falls back to `HF_ENDPOINT`, then `https://huggingface.co`) |
 | `AuthToken` | `string?` | `null` | HF auth token (falls back to `HF_TOKEN` env var) |
 | `Timeout` | `TimeSpan` | 30 minutes | HTTP request timeout |
 | `ResolveFileSizesBeforeDownload` | `bool` | `true` | Issue HEAD requests for accurate progress |
