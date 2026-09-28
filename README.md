@@ -17,6 +17,7 @@ A .NET library and CLI tool to download files (ONNX models, tokenizers, voice pr
 - 🔒 **Atomic writes** using temp files to avoid partial/corrupt downloads
 - 🔁 **Resumable downloads** using HTTP range requests for interrupted large files
 - 📌 **Revision pinning** with resolved commit metadata and optional expected commit enforcement
+- 🗂️ **Remote file listing** — enumerate files in a repo (models, datasets, spaces) before downloading, no need to know exact paths in advance
 - ✅ **Required vs optional files** — optional files fail silently
 - 🧾 **Manifest-based bundles** with SHA-256 and size validation
 - 📏 **HEAD requests** to resolve total download size before starting
@@ -63,6 +64,12 @@ hfdownload download --manifest ./phi4-bundle.json -o ./models/phi4
 
 # Check if files exist locally
 hfdownload check sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
+
+# List remote files in a repo without knowing filenames up front
+hfdownload files sentence-transformers/all-MiniLM-L6-v2
+
+# List remote files in a dataset repo, as JSON
+hfdownload files my-org/my-dataset --repo-type dataset --format json
 
 # List cached models
 hfdownload list
@@ -160,7 +167,26 @@ if (!ready)
 }
 ```
 
-### 5) Track download progress
+### 5) Discover files in a repo before downloading
+
+```csharp
+IReadOnlyList<RepoTreeEntry> entries = await downloader.ListRepoFilesAsync(
+    "sentence-transformers/all-MiniLM-L6-v2",
+    RepoType.Model);
+
+foreach (var entry in entries.Where(e => !e.IsDirectory))
+    Console.WriteLine($"{entry.Path} ({entry.SizeBytes} bytes)");
+
+// Use the discovered paths directly as a download request
+await downloader.DownloadFilesAsync(new DownloadRequest
+{
+    RepoId = "sentence-transformers/all-MiniLM-L6-v2",
+    LocalDirectory = "./models/miniLM",
+    RequiredFiles = [.. entries.Where(e => !e.IsDirectory).Select(e => e.Path)]
+});
+```
+
+### 6) Track download progress
 
 ```csharp
 var progress = new Progress<DownloadProgress>(p =>
@@ -180,7 +206,7 @@ await downloader.DownloadFilesAsync(new DownloadRequest
 });
 ```
 
-### 6) Authentication (Private/Gated Repos)
+### 7) Authentication (Private/Gated Repos)
 
 Set the `HF_TOKEN` environment variable, or pass it explicitly:
 
@@ -191,7 +217,7 @@ var downloader = new HuggingFaceDownloader(new HuggingFaceDownloaderOptions
 });
 ```
 
-### 7) Dependency Injection
+### 8) Dependency Injection
 
 ```csharp
 builder.Services.AddHuggingFaceDownloader(options =>
@@ -214,7 +240,7 @@ public class MyModelService(HuggingFaceDownloader downloader)
 }
 ```
 
-### 8) Manage local cache programmatically
+### 9) Manage local cache programmatically
 
 ```csharp
 var cacheRoot = DefaultPathHelper.GetDefaultCacheDirectory("hfdownload");

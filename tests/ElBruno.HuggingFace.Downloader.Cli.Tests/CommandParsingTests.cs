@@ -19,6 +19,7 @@ public sealed class CommandParsingTests
 
         root.Add(DownloadCommand.Create());
         root.Add(CheckCommand.Create());
+        root.Add(FilesCommand.Create());
         root.Add(ListCommand.Create());
         root.Add(InfoCommand.Create());
         root.Add(DeleteCommand.Create());
@@ -32,16 +33,17 @@ public sealed class CommandParsingTests
     // ── Root command ────────────────────────────────────────────────
 
     [Fact]
-    public void RootCommand_HasEightSubcommands()
+    public void RootCommand_HasNineSubcommands()
     {
         var root = BuildRootCommand();
 
-        Assert.Equal(8, root.Subcommands.Count);
+        Assert.Equal(9, root.Subcommands.Count);
     }
 
     [Theory]
     [InlineData("download")]
     [InlineData("check")]
+    [InlineData("files")]
     [InlineData("list")]
     [InlineData("info")]
     [InlineData("delete")]
@@ -101,6 +103,29 @@ public sealed class CommandParsingTests
 
         Assert.Contains("--output", optionNames);
         Assert.Contains("--revision", optionNames);
+    }
+
+    // ── Files command ───────────────────────────────────────────────
+
+    [Fact]
+    public void FilesCommand_HasExpectedArgument()
+    {
+        var cmd = FilesCommand.Create();
+
+        Assert.Contains(cmd.Arguments, a => a.Name == "repo-id");
+    }
+
+    [Fact]
+    public void FilesCommand_HasExpectedOptions()
+    {
+        var cmd = FilesCommand.Create();
+        var optionNames = GetOptionNames(cmd);
+
+        Assert.Contains("--repo-type", optionNames);
+        Assert.Contains("--revision", optionNames);
+        Assert.Contains("--path", optionNames);
+        Assert.Contains("--token", optionNames);
+        Assert.Contains("--format", optionNames);
     }
 
     // ── List command ────────────────────────────────────────────────
@@ -221,6 +246,7 @@ public sealed class CommandParsingTests
         {
             DownloadCommand.Create(),
             CheckCommand.Create(),
+            FilesCommand.Create(),
             ListCommand.Create(),
             InfoCommand.Create(),
             DeleteCommand.Create(),

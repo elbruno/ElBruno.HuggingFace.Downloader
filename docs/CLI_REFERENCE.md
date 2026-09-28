@@ -136,6 +136,46 @@ hfdownload check sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenize
 
 ---
 
+### `files` — List files in a remote repository
+
+```bash
+hfdownload files <repo-id> [options]
+```
+
+**Arguments:**
+
+| Argument | Description |
+|----------|-------------|
+| `<repo-id>` | Hugging Face repository ID |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--repo-type <type>` | Repository type: `model`, `dataset`, or `space` | `model` |
+| `-r, --revision <ref>` | Git branch, tag, or commit SHA | `main` |
+| `--path <subdir>` | Optional subdirectory within the repo to list | repo root |
+| `-t, --token <token>` | HF auth token (overrides `HF_TOKEN` env var) | none |
+| `--format <fmt>` | Output format: `table` or `json` | `table` |
+
+**Output:** A table (or JSON array) of every file/directory path in the repo, with size and type — no need to know file names in advance.
+
+**Example:**
+
+```bash
+hfdownload files sentence-transformers/all-MiniLM-L6-v2
+# Path                Type   Size
+# config.json         file   612 B
+# onnx                dir    -
+# onnx/model.onnx     file   90.4 MB
+# ...
+# 12 entries in sentence-transformers/all-MiniLM-L6-v2
+
+hfdownload files my-org/my-dataset --repo-type dataset --format json
+```
+
+---
+
 ### `list` — List downloaded models
 
 ```bash

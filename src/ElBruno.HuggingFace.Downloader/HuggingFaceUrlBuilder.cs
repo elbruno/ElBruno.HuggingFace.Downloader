@@ -22,6 +22,53 @@ public static class HuggingFaceUrlBuilder
         return $"{BaseUrl}/{repoId}/resolve/{revision}/{filePath}";
     }
 
+    /// <summary>
+    /// Returns the Hugging Face Hub tree API URL used to list the files and directories in a repository.
+    /// </summary>
+    /// <param name="repoId">Repository ID (e.g., "sentence-transformers/all-MiniLM-L6-v2").</param>
+    /// <param name="repoType">The kind of repository (model, dataset, or space).</param>
+    /// <param name="revision">Branch, tag, or commit SHA. Defaults to "main".</param>
+    /// <param name="path">Optional subdirectory path within the repository to list. Defaults to the repository root.</param>
+    /// <param name="recursive">If <see langword="true"/>, requests the full tree recursively in a single call.</param>
+    /// <param name="cursor">Pagination cursor returned by a previous call, if any.</param>
+    public static string GetTreeUrl(
+        string repoId,
+        RepoType repoType = RepoType.Model,
+        string revision = "main",
+        string? path = null,
+        bool recursive = true,
+        string? cursor = null)
+    {
+        ValidateRepoId(repoId);
+        ValidateRevision(revision);
+
+        if (path is not null)
+            ValidateFilePath(path);
+
+        var repoTypeSegment = repoType switch
+        {
+            RepoType.Model => "models",
+            RepoType.Dataset => "datasets",
+            RepoType.Space => "spaces",
+            _ => throw new ArgumentOutOfRangeException(nameof(repoType), repoType, "Unknown repository type.")
+        };
+
+        var url = $"{BaseUrl}/api/{repoTypeSegment}/{repoId}/tree/{revision}";
+        if (!string.IsNullOrEmpty(path))
+            url += $"/{path}";
+
+        var query = new List<string>();
+        if (recursive)
+            query.Add("recursive=true");
+        if (!string.IsNullOrEmpty(cursor))
+            query.Add($"cursor={Uri.EscapeDataString(cursor)}");
+
+        if (query.Count > 0)
+            url += "?" + string.Join("&", query);
+
+        return url;
+    }
+
     private static void ValidateRepoId(string repoId)
     {
         if (string.IsNullOrWhiteSpace(repoId))
