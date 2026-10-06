@@ -9,6 +9,8 @@
 
 A .NET library and CLI tool to download files (ONNX models, tokenizers, voice presets, etc.) from [Hugging Face Hub](https://huggingface.co) repositories with progress reporting, caching, and authentication support.
 
+**Project website:** [elbruno.github.io/ElBruno.HuggingFace.Downloader](https://elbruno.github.io/ElBruno.HuggingFace.Downloader/). See the [website guide](docs/WEBSITE.md) for publishing and local preview instructions.
+
 ## Features
 
 - 📦 **Download any file** from public or private Hugging Face repositories
@@ -288,6 +290,7 @@ Direct downloads also write `./models/.../.hf.download.resolved.json` so callers
 | [API Reference](docs/API_REFERENCE.md) | Complete class and method documentation |
 | [Architecture](docs/ARCHITECTURE.md) | Design decisions, data flow, and project structure |
 | [Publishing](docs/publishing.md) | NuGet publishing with GitHub Actions |
+| [Website](docs/WEBSITE.md) | GitHub Pages deployment, local preview, and website updates |
 
 ## Related Projects
 

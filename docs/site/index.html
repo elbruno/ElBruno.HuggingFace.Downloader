@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ElBruno.HuggingFace.Downloader | Hugging Face downloads for .NET</title>
+  <meta name="description" content="Download Hugging Face files with a free, MIT-licensed .NET library and CLI. Resumable downloads, caching, pinned revisions, and verified model bundles.">
+  <link rel="canonical" href="https://elbruno.github.io/ElBruno.HuggingFace.Downloader/">
+  <meta property="og:title" content="Hugging Face downloads. Built for .NET.">
+  <meta property="og:description" content="One open-source downloader. Use it in your app or from your terminal.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://elbruno.github.io/ElBruno.HuggingFace.Downloader/">
+  <meta name="theme-color" content="#f7f4ef">
+  <script>
+    (() => {
+      const param = new URLSearchParams(window.location.search).get("scoutTheme");
+      const theme =
+        param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --cp-bg: #f7f4ef;
+      --cp-bg-elevated: #fcfbf8;
+      --cp-surface: #ffffff;
+      --cp-surface-soft: #f5f5f5;
+      --cp-border: #dedede;
+      --cp-border-strong: #919191;
+      --cp-text: #242424;
+      --cp-text-muted: #5c5c5c;
+      --cp-text-soft: #6f6f6f;
+      --cp-accent: #b11f4b;
+      --cp-accent-hover: #9a1a41;
+      --cp-accent-soft: rgba(177, 31, 75, 0.08);
+      --cp-accent-fg: #ffffff;
+      --cp-success: #16a34a;
+      --cp-danger: #dc2626;
+      --cp-warning: #f59e0b;
+      --cp-link: #0078d4;
+      --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.12);
+      --cp-overlay: rgba(255, 255, 255, 0.8);
+      --cp-panel: rgba(255, 255, 255, 0.86);
+      --cp-panel-strong: rgba(255, 255, 255, 0.96);
+      --cp-sheen: rgba(255, 255, 255, 0.55);
+      --cp-highlight: rgba(177, 31, 75, 0.12);
+    }
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --cp-bg: #3d3b3a;
+      --cp-bg-elevated: #343231;
+      --cp-surface: #292929;
+      --cp-surface-soft: #2e2e2e;
+      --cp-border: #474747;
+      --cp-border-strong: #5f5f5f;
+      --cp-text: #dedede;
+      --cp-text-muted: #919191;
+      --cp-text-soft: #b0b0b0;
+      --cp-accent: #fd8ea1;
+      --cp-accent-hover: #fb7b91;
+      --cp-accent-soft: rgba(253, 142, 161, 0.14);
+      --cp-accent-fg: #1a1a1a;
+      --cp-success: #4ade80;
+      --cp-danger: #f87171;
+      --cp-warning: #fbbf24;
+      --cp-link: #4da6ff;
+      --cp-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+      --cp-overlay: rgba(41, 41, 41, 0.88);
+      --cp-panel: rgba(41, 41, 41, 0.72);
+      --cp-panel-strong: rgba(41, 41, 41, 0.96);
+      --cp-sheen: rgba(255, 255, 255, 0.04);
+      --cp-highlight: rgba(253, 142, 161, 0.12);
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--cp-bg); color: var(--cp-text); font: 1rem/1.65 "Segoe UI", Aptos, Calibri, -apple-system, BlinkMacSystemFont, sans-serif; }
+    a { color: var(--cp-link); text-underline-offset: 4px; }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible { outline: 3px solid var(--cp-accent); outline-offset: 5px; }
+    .wrap { width: min(1120px, calc(100% - 48px)); margin-inline: auto; }
+    .skip { position: absolute; top: -100px; left: 24px; padding: 12px; background: var(--cp-surface); z-index: 1; }
+    .skip:focus { top: 12px; }
+    header { border-bottom: 1px solid var(--cp-border); }
+    nav { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; padding-block: 24px; }
+    .brand { color: var(--cp-text); font-weight: 750; text-decoration: none; }
+    .brand span { color: var(--cp-accent); }
+    .nav-links { display: flex; flex-wrap: wrap; gap: 24px; }
+    .nav-links a { color: var(--cp-text-muted); text-decoration: none; }
+    .hero { display: grid; grid-template-columns: 1.2fr 1fr; gap: 48px; align-items: center; padding-block: 88px 64px; }
+    .eyebrow { color: var(--cp-accent); font-weight: 750; letter-spacing: .12em; font-size: .8rem; text-transform: uppercase; }
+    h1 { font-size: clamp(2.5rem, 5.5vw, 4.5rem); line-height: 1.06; letter-spacing: -.045em; margin: 16px 0 24px; }
+    h1 span { color: var(--cp-accent); }
+    .lead { font-size: 1.2rem; color: var(--cp-text-muted); max-width: 56ch; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+    .button { display: inline-block; padding: 12px 20px; border: 1px solid var(--cp-border-strong); border-radius: .625rem; color: var(--cp-text); background: var(--cp-surface); text-decoration: none; font-weight: 650; }
+    .button.primary { background: var(--cp-accent); color: var(--cp-accent-fg); border-color: var(--cp-accent); }
+    .button.primary:hover { background: var(--cp-accent-hover); border-color: var(--cp-accent-hover); }
+    .terminal, .card { border: 1px solid var(--cp-border); border-radius: 16px; background: var(--cp-surface); overflow: hidden; }
+    .terminal-title { padding: 12px 20px; border-bottom: 1px solid var(--cp-border); color: var(--cp-text-muted); font-size: .875rem; }
+    .terminal pre { padding: 24px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .terminal .prompt { color: var(--cp-accent); }
+    .terminal .success { color: var(--cp-success); }
+    code, pre { font-family: Consolas, "Courier New", Courier, monospace; font-size: .9rem; }
+    .badges { list-style: none; display: flex; gap: 12px; flex-wrap: wrap; padding: 0; margin: 24px 0 0; }
+    .badges li { border-radius: .625rem; padding: 6px 12px; background: var(--cp-accent-soft); color: var(--cp-accent); font-size: .875rem; font-weight: 650; }
+    section { padding-block: 48px; }
+    h2 { font-size: clamp(1.8rem, 3vw, 2.5rem); line-height: 1.2; letter-spacing: -.025em; margin: 0 0 16px; }
+    h3 { font-size: 1.15rem; line-height: 1.3; margin: 0 0 12px; }
+    .intro { color: var(--cp-text-muted); max-width: 68ch; margin: 0 0 28px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .card { padding: 24px; }
+    .card p { color: var(--cp-text-muted); margin: 0; }
+    .number { display: block; color: var(--cp-accent); font: 700 .85rem Consolas, "Courier New", Courier, monospace; margin-bottom: 20px; }
+    .packages { grid-template-columns: repeat(2, 1fr); }
+    .packages .card { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .packages h3 { margin-bottom: 0; overflow-wrap: anywhere; }
+    .packages pre { padding: 16px; margin: 0; background: var(--cp-surface-soft); border-radius: .625rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .packages a { margin-top: auto; }
+    .example { background: var(--cp-bg-elevated); border-block: 1px solid var(--cp-border); }
+    .example pre { padding: 28px; margin: 0; background: var(--cp-surface); border: 1px solid var(--cp-border); border-radius: 16px; overflow-x: auto; line-height: 1.8; }
+    .note { color: var(--cp-text-muted); font-size: .9rem; }
+    .trust { padding: 28px; border-left: 4px solid var(--cp-accent); background: var(--cp-surface); border-radius: .625rem; }
+    .trust p { margin: 0; color: var(--cp-text-muted); }
+    .docs-links { display: flex; flex-wrap: wrap; gap: 12px 28px; padding: 0; list-style: none; }
+    .availability { text-align: center; padding-block: 64px; }
+    .availability .actions { justify-content: center; }
+    footer { border-top: 1px solid var(--cp-border); padding-block: 24px; font-size: .9rem; color: var(--cp-text-muted); }
+    footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+    @media (max-width: 800px) {
+      .hero { grid-template-columns: 1fr; gap: 32px; padding-top: 48px; }
+      .grid { grid-template-columns: repeat(2, 1fr); }
+      .packages { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 520px) {
+      .wrap { width: calc(100% - 32px); }
+      .grid { grid-template-columns: 1fr; }
+      .nav-links { gap: 16px; }
+      section { padding-block: 32px; }
+      .example pre { padding: 16px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header>
+    <nav class="wrap" aria-label="Main navigation">
+      <a class="brand" href="./">ElBruno<span>.HuggingFace</span></a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#packages">Packages</a>
+        <a href="#docs">Docs</a>
+        <a href="https://github.com/elbruno/ElBruno.HuggingFace.Downloader">GitHub</a>
+      </div>
+    </nav>
+  </header>
+  <main id="main">
+    <div class="wrap hero">
+      <div>
+        <div class="eyebrow">ElBruno.HuggingFace.Downloader</div>
+        <h1>Hugging Face downloads.<br><span>Built for .NET.</span></h1>
+        <p class="lead">Bring the files your app needs from the Hub to your machine. A model-agnostic library and CLI for reliable downloads, local caching, and verified bundles.</p>
+        <div class="actions">
+          <a class="button primary" href="#packages">Start downloading</a>
+          <a class="button" href="https://github.com/elbruno/ElBruno.HuggingFace.Downloader">Explore the source</a>
+        </div>
+        <ul class="badges" aria-label="Project highlights">
+          <li>Free to use</li><li>Open source</li><li>MIT licensed</li>
+        </ul>
+      </div>
+      <div class="terminal" aria-label="Example CLI command and illustrative download stages">
+        <div class="terminal-title">Your terminal. Your files.</div>
+        <pre><code><span class="prompt">&gt;</span> hfdownload download sentence-transformers/all-MiniLM-L6-v2 onnx/model.onnx tokenizer.json
+
+Checking    Required files
+Downloading Files from the Hub
+Validating  Downloaded files
+<span class="success">Complete    Ready for your app</span></code></pre>
+        <div class="terminal-title">Illustrative download stages, not a live download.</div>
+      </div>
+    </div>
+    <section id="features" class="wrap" aria-labelledby="features-title">
+      <div class="eyebrow">Less plumbing. More building.</div>
+      <h2 id="features-title">Everything around the download, handled.</h2>
+      <p class="intro">ONNX models, tokenizers, voice presets, datasets, or any other repository file. You choose what to download and where it belongs.</p>
+      <div class="grid">
+        <article class="card"><span class="number">01 / RELIABILITY</span><h3>Pick up where you left off</h3><p>Resume interrupted downloads with HTTP range requests. Atomic writes are enabled by default to keep incomplete files out of the final destination.</p></article>
+        <article class="card"><span class="number">02 / LOCAL CACHE</span><h3>Download only what you need</h3><p>Skip existing files, check what is available, and inspect or manage your cache from code or the command line.</p></article>
+        <article class="card"><span class="number">03 / INTEGRITY</span><h3>Know exactly what you downloaded</h3><p>Pin revisions, inspect resolved commits, and validate manifest-based bundles against expected SHA-256 hashes and file sizes.</p></article>
+        <article class="card"><span class="number">04 / DISCOVERY</span><h3>Explore before you download</h3><p>List remote files in model, dataset, and Space repositories. Choose required and optional files for your application.</p></article>
+        <article class="card"><span class="number">05 / VISIBILITY</span><h3>Keep users in the loop</h3><p>Track checking, downloading, validating, and completion stages. Integrate structured logging and dependency injection in your .NET app.</p></article>
+        <article class="card"><span class="number">06 / FLEXIBILITY</span><h3>Connect to your Hub</h3><p>Use public repositories, authenticate for gated or private files, or configure a custom Hub endpoint. Bring your own HttpClient when you need it.</p></article>
+      </div>
+    </section>
+    <section id="packages" class="wrap" aria-labelledby="packages-title">
+      <h2 id="packages-title">One downloader. Two ways to use it.</h2>
+      <p class="intro">Add the library to your application or install the standalone .NET tool. Both are available on NuGet.</p>
+      <div class="grid packages">
+        <article class="card">
+          <div class="eyebrow">For your application</div>
+          <h3>ElBruno.HuggingFace.Downloader</h3>
+          <p>A reusable .NET library for download requests, progress reporting, cache management, and manifest-based bundles.</p>
+          <pre><code>dotnet add package ElBruno.HuggingFace.Downloader</code></pre>
+          <a href="https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader">Get the library on NuGet &rarr;</a>
+        </article>
+        <article class="card">
+          <div class="eyebrow">For your terminal</div>
+          <h3>ElBruno.HuggingFace.Downloader.Cli</h3>
+          <p>The hfdownload command for downloading files, discovering repository contents, and managing your local cache.</p>
+          <pre><code>dotnet tool install -g ElBruno.HuggingFace.Downloader.Cli</code></pre>
+          <a href="https://www.nuget.org/packages/ElBruno.HuggingFace.Downloader.Cli">Get the CLI on NuGet &rarr;</a>
+        </article>
+      </div>
+      <p class="note">Current projects target .NET 8 and .NET 10. CLI cache helpers support Windows, Linux, and macOS.</p>
+    </section>
+    <section class="example" aria-labelledby="example-title">
+      <div class="wrap">
+        <h2 id="example-title">From the Hub to your app, in a few lines.</h2>
+        <p class="intro">Choose your repository, file list, and local directory. The downloader handles the rest.</p>
+        <pre><code>using ElBruno.HuggingFace;
+
+using var downloader = new HuggingFaceDownloader();
+
+await downloader.DownloadFilesAsync(new DownloadRequest
+{
+    RepoId = "sentence-transformers/all-MiniLM-L6-v2",
+    LocalDirectory = "./models/miniLM",
+    RequiredFiles = ["onnx/model.onnx", "tokenizer.json"]
+});</code></pre>
+        <p class="note">The model above is just an example. The library is not tied to any model or inference framework.</p>
+      </div>
+    </section>
+    <section class="wrap" aria-labelledby="trust-title">
+      <div class="trust">
+        <h2 id="trust-title">Open source. No downloader account.</h2>
+        <p>Use the library and CLI for free under the MIT license. There are no in-app purchases or downloader service accounts. Files are saved to a directory you control. Downloads contact Hugging Face or your configured Hub endpoint; gated and private repositories may require a Hugging Face account, access approval, and token. This website has no analytics, cookies, external fonts, or third-party scripts. GitHub Pages and Hub providers may process request metadata under their own policies.</p>
+      </div>
+    </section>
+    <section id="docs" class="wrap" aria-labelledby="docs-title">
+      <h2 id="docs-title">Go from quick start to full control.</h2>
+      <p class="intro">Examples, commands, and API details live alongside the source so you can explore how it all works.</p>
+      <ul class="docs-links">
+        <li><a href="https://github.com/elbruno/ElBruno.HuggingFace.Downloader/blob/main/docs/GETTING_STARTED.md">Getting started</a></li>
+        <li><a href="https://github.com/elbruno/ElBruno.HuggingFace.Downloader/blob/main/docs/CLI_REFERENCE.md">CLI reference</a></li>
+        <li><a href="https://github.com/elbruno/ElBruno.HuggingFace.Downloader/blob/main/docs/API_REFERENCE.md">API reference</a></li>
+        <li><a href="https://github.com/elbruno/ElBruno.HuggingFace.Downloader/blob/main/docs/ARCHITECTURE.md">Architecture</a></li>
+      </ul>
+    </section>
+    <section class="wrap availability" aria-labelledby="availability-title">
+      <div class="eyebrow">Available now on NuGet</div>
+      <h2 id="availability-title">Build something that runs locally.</h2>
+      <p>Get the .NET library or CLI. Read the source. Make it yours.</p>
+      <div class="actions">
+        <a class="button primary" href="#packages">Get the packages</a>
+        <a class="button" href="https://github.com/elbruno/ElBruno.HuggingFace.Downloader/blob/main/LICENSE">Read the MIT license</a>
+      </div>
+    </section>
+  </main>
+  <footer>
+    <div class="wrap">
+      <span>Built by <a href="https://elbruno.com">Bruno Capuano / ElBruno</a>. Free and open source.</span>
+      <a href="https://elbruno.github.io/ElBruno.HuggingFace.Downloader/">elbruno.github.io/ElBruno.HuggingFace.Downloader/</a>
+    </div>
+  </footer>
+</body>
+</html>
