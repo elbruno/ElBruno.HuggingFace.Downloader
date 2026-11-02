@@ -44,6 +44,20 @@ A .NET library and CLI tool to download files (ONNX models, tokenizers, voice pr
 dotnet add package ElBruno.HuggingFace.Downloader
 ```
 
+#### .NET Framework
+
+The package also targets `netstandard2.0`, so it works on .NET Framework 4.6.2 and later. `DownloadRequest` and the other request types use `required` and `init` properties, which need C# 11 or later (the samples below also use collection expressions, so `latest` is the simplest choice). Passing options or an `HttpClient` to the `HuggingFaceDownloader` constructor also needs a reference to `System.Net.Http`:
+
+```xml
+<PropertyGroup>
+  <LangVersion>latest</LangVersion>
+</PropertyGroup>
+
+<ItemGroup>
+  <Reference Include="System.Net.Http" />
+</ItemGroup>
+```
+
 ### CLI Tool
 
 ```bash

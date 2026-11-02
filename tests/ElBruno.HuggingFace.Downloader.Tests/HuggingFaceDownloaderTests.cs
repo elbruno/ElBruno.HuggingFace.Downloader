@@ -592,18 +592,42 @@ public class HuggingFaceDownloaderTests : IDisposable
     /// </summary>
     private sealed class CancellingStream(byte[] data, CancellationTokenSource cts) : MemoryStream(data)
     {
+#if NETFRAMEWORK
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            cts.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            return base.ReadAsync(buffer, offset, count, cancellationToken);
+        }
+#else
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             cts.Cancel();
             cancellationToken.ThrowIfCancellationRequested();
             return base.ReadAsync(buffer, cancellationToken);
         }
+#endif
     }
 
     private sealed class PartialCancellingStream(byte[] data, CancellationTokenSource cts, int firstChunkSize) : MemoryStream(data)
     {
         private bool _returnedFirstChunk;
 
+#if NETFRAMEWORK
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (!_returnedFirstChunk)
+            {
+                _returnedFirstChunk = true;
+                var length = Math.Min(firstChunkSize, (int)(Length - Position));
+                return base.ReadAsync(buffer, offset, Math.Min(count, length), cancellationToken);
+            }
+
+            cts.Cancel();
+            cancellationToken.ThrowIfCancellationRequested();
+            return base.ReadAsync(buffer, offset, count, cancellationToken);
+        }
+#else
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             if (!_returnedFirstChunk)
@@ -617,7 +641,37 @@ public class HuggingFaceDownloaderTests : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             return base.ReadAsync(buffer, cancellationToken);
         }
+#endif
     }
+
+#if NETFRAMEWORK
+    /// <summary>
+    /// A stream that returns its data, then waits without looking at the token until it is disposed, like the response stream of
+    /// .NET Framework when the server stops sending.
+    /// </summary>
+    private sealed class StalledStream(byte[] data) : MemoryStream(data)
+    {
+        private readonly TaskCompletionSource<int> _pendingRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _stalled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Stalled => _stalled.Task;
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (Position < Length)
+                return base.ReadAsync(buffer, offset, count, cancellationToken);
+
+            _stalled.TrySetResult(true);
+            return _pendingRead.Task;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            _pendingRead.TrySetException(new ObjectDisposedException(nameof(StalledStream)));
+            base.Dispose(disposing);
+        }
+    }
+#endif
 
     private static HttpResponseMessage CreateFileResponse(string content, string? resolvedCommitSha = null)
     {
@@ -653,7 +707,7 @@ public class HuggingFaceDownloaderTests : IDisposable
 
     private static HttpResponseMessage CreateRangeResponse(byte[] content, long from, string? entityTag = null)
     {
-        var rangeContent = content[(int)from..];
+        var rangeContent = content.AsSpan((int)from).ToArray();
         var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
         {
             Content = new ByteArrayContent(rangeContent)
@@ -1398,6 +1452,41 @@ public class HuggingFaceDownloaderTests : IDisposable
         Assert.Equal(256, new FileInfo(localPath + ".partial").Length);
     }
 
+#if NETFRAMEWORK
+    [Fact]
+    public async Task DownloadFilesAsync_CancelledWhileReadIsWaitingForData_ThrowsOperationCancelled()
+    {
+        using var cts = new CancellationTokenSource();
+        var localPath = Path.Combine(_tempDir, "model.onnx");
+        var stream = new StalledStream(new byte[256]);
+
+        var handler = new MockHttpMessageHandler((request, _) =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(stream)
+            };
+            return Task.FromResult(response);
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new HuggingFaceDownloaderOptions { ResolveFileSizesBeforeDownload = false };
+        using var downloader = new HuggingFaceDownloader(httpClient, options);
+
+        var download = downloader.DownloadFilesAsync(new DownloadRequest
+        {
+            RepoId = "test/repo",
+            LocalDirectory = _tempDir,
+            RequiredFiles = ["model.onnx"]
+        }, cts.Token);
+        await stream.Stalled.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => download.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(256, new FileInfo(localPath + ".partial").Length);
+    }
+#endif
+
     [Fact]
     public async Task DownloadFilesAsync_CancelledDuringDownload_WithoutResume_CleansTemporaryFiles()
     {
@@ -1687,6 +1776,30 @@ public class HuggingFaceDownloaderTests : IDisposable
         Assert.Contains(result, f => f.Path == "onnx" && f.IsDirectory && f.SizeBytes == null);
         Assert.Contains(result, f => f.Path == "onnx/model.onnx" && f.SizeBytes == 456 && !f.IsDirectory);
     }
+
+#if NETFRAMEWORK
+    [Fact]
+    public async Task ListRepoFilesAsync_CancelledWhileReadIsWaitingForData_ThrowsOperationCancelled()
+    {
+        using var cts = new CancellationTokenSource();
+        var stream = new StalledStream(System.Text.Encoding.UTF8.GetBytes("""[{"type":"file","path":"config.json","size":123},"""));
+
+        var handler = new MockHttpMessageHandler((request, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(stream)
+            }));
+
+        using var httpClient = new HttpClient(handler);
+        using var downloader = new HuggingFaceDownloader(httpClient);
+
+        var listing = downloader.ListRepoFilesAsync("test/repo", cancellationToken: cts.Token);
+        await stream.Stalled.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listing.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+#endif
 
     [Fact]
     public async Task ListRepoFilesAsync_UsesCorrectUrlForRepoType()

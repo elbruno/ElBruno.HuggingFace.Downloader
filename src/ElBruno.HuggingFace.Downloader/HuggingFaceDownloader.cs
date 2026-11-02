@@ -221,8 +221,14 @@ public sealed class HuggingFaceDownloader : IDisposable
                     $"Failed to list files for repository '{repoId}'. Status: {statusCode}");
             }
 
+#if NETSTANDARD2_0
+            using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            using var cancellationRegistration = DisposeOnCancel(response, cancellationToken);
+            using var document = await CancelableAsync(JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken), cancellationToken).ConfigureAwait(false);
+#else
             await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+#endif
 
             foreach (var entry in document.RootElement.EnumerateArray())
             {
@@ -450,7 +456,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             }
             catch (HttpRequestException ex) when (required)
             {
-                var statusCode = ex.StatusCode;
+                var statusCode = HttpStatusCodes.Of(ex);
                 if (statusCode == HttpStatusCode.Unauthorized || statusCode == HttpStatusCode.Forbidden)
                 {
                     throw new InvalidOperationException(
@@ -687,7 +693,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             }
             catch (HttpRequestException ex) when (file.Required)
             {
-                var statusCode = ex.StatusCode;
+                var statusCode = HttpStatusCodes.Of(ex);
                 if (statusCode == HttpStatusCode.Unauthorized || statusCode == HttpStatusCode.Forbidden)
                 {
                     throw new InvalidOperationException(
@@ -893,10 +899,9 @@ public sealed class HuggingFaceDownloader : IDisposable
 
             if (!response.IsSuccessStatusCode)
             {
-                throw new HttpRequestException(
+                throw HttpStatusCodes.Exception(
                     $"Failed to download file. Status: {response.StatusCode}, URL: {url}",
-                    inner: null,
-                    statusCode: response.StatusCode);
+                    response.StatusCode);
             }
 
             UpdateResolvedCommitSha(request, TryGetResolvedCommitSha(response.Headers));
@@ -938,18 +943,22 @@ public sealed class HuggingFaceDownloader : IDisposable
 
             try
             {
+#if NETSTANDARD2_0
+                using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                using var fileStream = OpenWriteStream(downloadState);
+                using var cancellationRegistration = DisposeOnCancel(response, cancellationToken);
+#else
                 await using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-                await using var fileStream = new FileStream(
-                    downloadState.WritePath,
-                    downloadState.ResumedBytes > 0 ? FileMode.Append : FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.None,
-                    bufferSize: FileStreamBufferSize,
-                    useAsync: true);
+                await using var fileStream = OpenWriteStream(downloadState);
+#endif
 
                 int bytesRead;
                 var buffer = new byte[FileStreamBufferSize];
+#if NETSTANDARD2_0
+                while ((bytesRead = await CancelableAsync(contentStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken), cancellationToken).ConfigureAwait(false)) > 0)
+#else
                 while ((bytesRead = await contentStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+#endif
                 {
                     await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), cancellationToken).ConfigureAwait(false);
 
@@ -971,7 +980,13 @@ public sealed class HuggingFaceDownloader : IDisposable
 
                 await fileStream.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
+#if NETSTANDARD2_0
+            // The bytes written in this attempt count too: .NET Framework keeps them in the buffer of the FileStream until it is disposed,
+            // which happens after this filter.
+            catch (Exception) when (downloadState.AllowResume && (downloadedThisAttempt > 0 || GetFileLength(downloadState.WritePath) > 0))
+#else
             catch (Exception) when (downloadState.AllowResume && GetFileLength(downloadState.WritePath) > 0)
+#endif
             {
                 _logger.LogInformation("Preserving partial download for {File} at {Path}", filePath, downloadState.WritePath);
                 throw;
@@ -1507,16 +1522,51 @@ public sealed class HuggingFaceDownloader : IDisposable
 
     private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
     {
-        await using var stream = new FileStream(
+#if NETSTANDARD2_0
+        using var stream = OpenReadStream(path);
+#else
+        await using var stream = OpenReadStream(path);
+#endif
+        var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static FileStream OpenReadStream(string path)
+        => new(
             path,
             FileMode.Open,
             FileAccess.Read,
             FileShare.Read,
             bufferSize: FileStreamBufferSize,
             useAsync: true);
-        var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
-        return Convert.ToHexString(hash).ToLowerInvariant();
+
+    private static FileStream OpenWriteStream(DownloadState downloadState)
+        => new(
+            downloadState.WritePath,
+            downloadState.ResumedBytes > 0 ? FileMode.Append : FileMode.Create,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: FileStreamBufferSize,
+            useAsync: true);
+
+#if NETSTANDARD2_0
+    // .NET Framework checks the token only when a read of a response body starts, so a read that is waiting for data from a server
+    // that stopped sending ignores it: disposing the response ends that read, and CancelableAsync turns its error into a cancellation.
+    private static CancellationTokenRegistration DisposeOnCancel(HttpResponseMessage response, CancellationToken cancellationToken)
+        => cancellationToken.Register(response.Dispose);
+
+    private static async Task<T> CancelableAsync<T>(Task<T> operation, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await operation.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && cancellationToken.IsCancellationRequested)
+        {
+            throw new TaskCanceledException("The operation was canceled.", ex);
+        }
     }
+#endif
 
     private static PartialDownloadMetadata? TryReadPartialMetadata(string metadataPath)
     {

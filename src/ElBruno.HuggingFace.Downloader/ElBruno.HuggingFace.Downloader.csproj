@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <TargetFrameworks>net8.0;net10.0;netstandard2.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>ElBruno.HuggingFace</RootNamespace>
@@ -33,6 +33,19 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ElBruno.HuggingFace.Downloader.Tests" />
+  </ItemGroup>
+
+  <!-- .NET Framework 4.6.2+ and other netstandard2.0 runtimes: Polyfill supplies the newer BCL APIs at compile time. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <LangVersion>latest</LangVersion>
+    <PolyArgumentExceptions>true</PolyArgumentExceptions>
+    <!-- The netstandard2.0 BCL has no nullable annotations (string.IsNullOrEmpty, ...): the same code is checked by the net8.0 and net10.0 builds. -->
+    <Nullable>annotations</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="Polyfill" Version="11.4.5" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+    <PackageReference Include="System.Text.Json" Version="10.0.5" />
   </ItemGroup>
 
 </Project>
