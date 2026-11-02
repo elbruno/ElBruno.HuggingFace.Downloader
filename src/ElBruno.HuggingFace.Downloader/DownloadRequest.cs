@@ -33,6 +33,7 @@ public sealed class DownloadRequest
 
     /// <summary>
     /// Optional immutable commit SHA that the resolved revision must match.
+    /// Downloads fail if the commit cannot be verified; verified downloads use an immutable commit URL.
     /// </summary>
     public string? ExpectedCommitSha { get; init; }
 

@@ -83,12 +83,13 @@ public static class ConfigCommand
 
             if (!manager.SetValue(config, key, value))
             {
-                AnsiConsole.MarkupLine($"[red]Error:[/] Invalid value [bold]{Markup.Escape(value)}[/] for key [bold]{Markup.Escape(key)}[/]");
+                AnsiConsole.MarkupLine($"[red]Error:[/] Invalid value for key [bold]{Markup.Escape(key)}[/]");
                 return Task.FromResult(1);
             }
 
             manager.Save(config);
-            AnsiConsole.MarkupLine($"[green]✓[/] Set [bold]{Markup.Escape(key)}[/] = {Markup.Escape(value)}");
+            var displayValue = ConfigManager.GetValue(config, key) ?? "(unknown)";
+            AnsiConsole.MarkupLine($"[green]✓[/] Set [bold]{Markup.Escape(key)}[/] = {Markup.Escape(displayValue)}");
             return Task.FromResult(0);
         });
 

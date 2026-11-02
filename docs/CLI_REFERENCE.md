@@ -340,6 +340,8 @@ hfdownload config set default-revision v2.0
 hfdownload config set no-progress true
 ```
 
+Token values are masked in `config show` and `config set` confirmations. Command-line arguments may still appear in shell history or process listings; prefer `HF_TOKEN` in automated environments.
+
 #### `config reset`
 
 ```bash

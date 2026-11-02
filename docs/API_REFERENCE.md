@@ -51,7 +51,7 @@ Describes a set of files to download from a Hugging Face repository.
 | `RequiredFiles` | `IReadOnlyList<string>` | *(required)* | Files that must be downloaded (failure throws) |
 | `OptionalFiles` | `IReadOnlyList<string>?` | `null` | Files downloaded on best-effort basis |
 | `Revision` | `string` | `"main"` | Git branch, tag, or commit SHA |
-| `ExpectedCommitSha` | `string?` | `null` | Optional immutable commit SHA that the resolved revision must match |
+| `ExpectedCommitSha` | `string?` | `null` | Optional immutable commit SHA that the resolved revision must match. Throws if unavailable or mismatched; downloads use the verified immutable commit URL. |
 | `ResolvedCommitSha` | `string?` | `null` | Immutable commit SHA resolved by the downloader when available |
 | `Progress` | `IProgress<DownloadProgress>?` | `null` | Progress reporter |
 | `UseAtomicWrites` | `bool` | `true` | Write to temp file first, then rename |

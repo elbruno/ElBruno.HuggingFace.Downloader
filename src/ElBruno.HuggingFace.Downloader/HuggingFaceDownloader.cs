@@ -16,7 +16,7 @@ public sealed class HuggingFaceDownloader : IDisposable
     private const string PartialFileSuffix = ".partial";
     private const string PartialMetadataSuffix = ".partial.json";
     private const string AtomicTempFileSuffix = ".tmp";
-    private const string ResolvedCommitHeaderName = "X-Resolved-Revision";
+    private const string ResolvedCommitHeaderName = "X-Repo-Commit";
     private const int FileStreamBufferSize = 81920;
 
     private static readonly JsonSerializerOptions MetadataJsonOptions = new()
@@ -326,7 +326,10 @@ public sealed class HuggingFaceDownloader : IDisposable
             throw new ArgumentException("LocalDirectory cannot be null or empty.", nameof(request));
 
         Directory.CreateDirectory(request.LocalDirectory);
-        request.ResolvedCommitSha = NormalizeResolvedCommitSha(request.ResolvedCommitSha);
+        var expectedCommitSha = NormalizeExpectedCommitSha(request.ExpectedCommitSha);
+        request.ResolvedCommitSha = expectedCommitSha is null
+            ? NormalizeResolvedCommitSha(request.ResolvedCommitSha)
+            : null;
         UpdateResolvedCommitSha(request, request.Revision);
 
         var allFiles = new List<(string path, bool required)>(request.RequiredFiles.Count + (request.OptionalFiles?.Count ?? 0));
@@ -353,6 +356,9 @@ public sealed class HuggingFaceDownloader : IDisposable
                 cancellationToken).ConfigureAwait(false);
             UpdateResolvedCommitSha(request, resolvedCommitSha);
         }
+
+        ValidateExpectedCommitSha(expectedCommitSha, request.ResolvedCommitSha);
+        var downloadRevision = expectedCommitSha ?? request.Revision;
 
         EnsureLocalDirectoryRevisionCompatibility(
             request.LocalDirectory,
@@ -400,7 +406,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             if (!_options.ResolveFileSizesBeforeDownload && !hasPartial)
                 continue;
 
-            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, path, request.Revision, _options.ResolveEndpoint());
+            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, path, downloadRevision, _options.ResolveEndpoint());
             var remoteInfo = await TryGetRemoteFileInfoAsync(url, cancellationToken).ConfigureAwait(false);
             UpdateResolvedCommitSha(request, remoteInfo?.ResolvedCommitSha);
             remoteFileInfos[path] = remoteInfo;
@@ -422,7 +428,7 @@ public sealed class HuggingFaceDownloader : IDisposable
             if (!string.IsNullOrEmpty(localDir))
                 Directory.CreateDirectory(localDir);
 
-            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, filePath, request.Revision, _options.ResolveEndpoint());
+            var url = HuggingFaceUrlBuilder.GetFileUrl(request.RepoId, filePath, downloadRevision, _options.ResolveEndpoint());
             var remoteInfo = remoteFileInfos.GetValueOrDefault(filePath);
 
             try
@@ -1187,8 +1193,11 @@ public sealed class HuggingFaceDownloader : IDisposable
 
     private static string? TryGetResolvedCommitSha(HttpHeaders headers)
     {
-        return headers.TryGetValues(ResolvedCommitHeaderName, out var values)
-            ? NormalizeResolvedCommitSha(values.FirstOrDefault())
+        if (headers.TryGetValues(ResolvedCommitHeaderName, out var values))
+            return NormalizeResolvedCommitSha(values.FirstOrDefault());
+
+        return headers.TryGetValues("X-Resolved-Revision", out var legacyValues)
+            ? NormalizeResolvedCommitSha(legacyValues.FirstOrDefault())
             : null;
     }
 
@@ -1204,7 +1213,8 @@ public sealed class HuggingFaceDownloader : IDisposable
                 request.Revision);
         }
 
-        ValidateExpectedCommitSha(request.ExpectedCommitSha, request.ResolvedCommitSha);
+        if (request.ResolvedCommitSha is not null)
+            ValidateExpectedCommitSha(request.ExpectedCommitSha, request.ResolvedCommitSha);
     }
 
     private static string? MergeResolvedCommitSha(
@@ -1229,8 +1239,14 @@ public sealed class HuggingFaceDownloader : IDisposable
     private static void ValidateExpectedCommitSha(string? expectedCommitSha, string? resolvedCommitSha)
     {
         var normalizedExpectedCommitSha = NormalizeExpectedCommitSha(expectedCommitSha);
-        if (normalizedExpectedCommitSha is null || string.IsNullOrEmpty(resolvedCommitSha))
+        if (normalizedExpectedCommitSha is null)
             return;
+
+        if (string.IsNullOrEmpty(resolvedCommitSha))
+        {
+            throw new InvalidOperationException(
+                $"Cannot verify expected commit '{normalizedExpectedCommitSha}': the repository did not expose a resolved commit. Use an immutable commit SHA as Revision.");
+        }
 
         if (!string.Equals(normalizedExpectedCommitSha, resolvedCommitSha, StringComparison.Ordinal))
         {

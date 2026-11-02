@@ -168,6 +168,8 @@ await downloader.DownloadFilesAsync(request);
 Console.WriteLine(request.ResolvedCommitSha);
 ```
 
+When `ExpectedCommitSha` is set, the download fails if the resolved commit is missing or differs from the expected SHA. Downloads use the verified immutable commit URL so a moving branch cannot change between verification and transfer. If a custom endpoint or redirect hides revision headers, set `Revision` to the immutable commit SHA.
+
 ### 4) Check if files are already downloaded
 
 ```csharp
