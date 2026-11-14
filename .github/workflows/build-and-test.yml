@@ -19,6 +19,7 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
+            11.0.x
 
       - name: Restore dependencies
         run: dotnet restore ElBruno.HuggingFace.Downloader.slnx
@@ -41,6 +42,7 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
+            11.0.x
 
       - name: Test on .NET Framework
         run: dotnet test tests/ElBruno.HuggingFace.Downloader.Tests/ElBruno.HuggingFace.Downloader.Tests.csproj --configuration Release --framework net48 --verbosity normal
@@ -59,6 +61,7 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
+            11.0.x
 
       - name: Pack
         run: dotnet pack src/ElBruno.HuggingFace.Downloader/ElBruno.HuggingFace.Downloader.csproj --configuration Release --output ./nupkg

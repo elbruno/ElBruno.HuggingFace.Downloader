@@ -24,6 +24,7 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
+            11.0.x
 
       - name: Test on .NET Framework
         run: dotnet test tests/ElBruno.HuggingFace.Downloader.Tests/ElBruno.HuggingFace.Downloader.Tests.csproj -c Release --framework net48 --verbosity normal
@@ -46,6 +47,7 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
+            11.0.x
 
       - name: Determine version
         id: version
