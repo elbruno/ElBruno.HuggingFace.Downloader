@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <TargetFrameworks>net8.0;net10.0;net11.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>ElBruno.HuggingFace.Cli</RootNamespace>
@@ -14,7 +14,7 @@
 
     <!-- NuGet Package Metadata -->
     <PackageId>ElBruno.HuggingFace.Downloader.Cli</PackageId>
-    <Version>1.6.1</Version>
+    <Version>1.6.2</Version>
     <Authors>Bruno Capuano</Authors>
     <Description>A .NET CLI tool to download, manage, and inspect cached files from Hugging Face Hub repositories.</Description>
     <PackageTags>huggingface;download;cli;dotnet-tool;onnx;model;ml;ai</PackageTags>
