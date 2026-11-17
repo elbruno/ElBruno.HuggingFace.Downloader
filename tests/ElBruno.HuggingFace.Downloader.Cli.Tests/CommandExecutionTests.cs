@@ -27,8 +27,7 @@ public sealed class CommandExecutionTests : IDisposable
     private static async Task<int> InvokeAsync(params string[] args)
     {
         var root = TestHelpers.BuildRootCommand();
-        var config = new CommandLineConfiguration(root);
-        return await config.InvokeAsync(args);
+        return await root.Parse(args).InvokeAsync();
     }
 
     // ── Check command E2E ────────────────────────────────────────────
