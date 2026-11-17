@@ -267,12 +267,11 @@ public sealed class CommandParsingTests
     public void RootCommand_HelpTextGeneration_DoesNotThrow()
     {
         var root = BuildRootCommand();
-        var config = new CommandLineConfiguration(root);
 
         // Invoking --help shouldn't throw — the return code is informational
         var exception = Record.Exception(() =>
         {
-            config.InvokeAsync(["--help"]).GetAwaiter().GetResult();
+            root.Parse(["--help"]).InvokeAsync().GetAwaiter().GetResult();
         });
 
         Assert.Null(exception);

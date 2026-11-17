@@ -45,9 +45,8 @@ public sealed class ConfigCommandTests : IDisposable
         {
             var root = new RootCommand();
             root.Add(ConfigCommand.Create());
-            var configuration = new CommandLineConfiguration(root);
 
-            Assert.Equal(0, await configuration.InvokeAsync(["config", "set", key, value]));
+            Assert.Equal(0, await root.Parse(["config", "set", key, value]).InvokeAsync());
             Assert.Contains(expectedDisplay, output.ToString());
             if (key == "default-token")
             {

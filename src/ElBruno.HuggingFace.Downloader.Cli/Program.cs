@@ -19,5 +19,4 @@ rootCommand.Add(PurgeCommand.Create());
 // Configuration commands
 rootCommand.Add(ConfigCommand.Create());
 
-var config = new CommandLineConfiguration(rootCommand);
-return await config.InvokeAsync(args);
+return await rootCommand.Parse(args).InvokeAsync();
